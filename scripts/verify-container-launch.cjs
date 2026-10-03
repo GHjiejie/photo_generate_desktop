@@ -1,0 +1,46 @@
+const {_electron:electron,expect}=require('@playwright/test');
+const fs=require('node:fs');
+const path=require('node:path');
+const os=require('node:os');
+const originals=require('../assets/selected-prompts.json');
+const translations=require('../assets/prompts.zh.json');
+const root=path.resolve(__dirname,'..');
+const executable=process.env.PORTRAIT_STUDIO_EXECUTABLE;
+const kind=process.env.PORTRAIT_STUDIO_VERIFICATION_NAME;
+if(!executable||!kind)throw new Error('Set the container executable and unique verification name.');
+(async()=>{
+  const profile=fs.mkdtempSync(path.join(os.tmpdir(),`portrait-${kind}-`));
+  const app=await electron.launch({executablePath:executable,args:[],env:{...process.env,PORTRAIT_STUDIO_USER_DATA_DIR:profile}});
+  let saved=false;const checks=[];const errors=[];
+  try{
+    const page=await app.firstWindow();page.on('pageerror',error=>errors.push(error.message));
+    await app.evaluate(({clipboard})=>{globalThis.__originalClipboard={text:clipboard.readText(),html:clipboard.readHTML(),rtf:clipboard.readRTF(),image:clipboard.readImage()};});saved=true;
+    await expect(page.locator('.portrait-card')).toHaveCount(13);
+    const security=await app.evaluate(({BrowserWindow,app})=>({packaged:app.isPackaged,userData:app.getPath('userData'),pid:process.pid,preferences:BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences()}));
+    expect(security.packaged).toBe(true);expect(security.userData).toBe(profile);
+    for(const name of ['sandbox','contextIsolation','webSecurity'])expect(security.preferences[name]).toBe(true);
+    expect(security.preferences.nodeIntegration).toBe(false);
+    await page.setViewportSize({width:2048,height:1280});await page.locator('#gridToggle').click();
+    await page.locator('.portrait-image').evaluateAll(async images=>{for(const image of images){image.loading='eager';await image.decode();}});
+    await page.mouse.move(0,0);await page.screenshot({path:path.join(root,'.verification',`${kind}-2048x1280-dense.png`),scale:'css',animations:'disabled'});
+    await page.locator('.portrait-card').first().click();
+    expect(await page.locator('#detailPrompt').textContent()).toBe(originals[0].prompt);
+    await page.locator('#detailCopy').click();await expect.poll(()=>app.evaluate(({clipboard})=>clipboard.readText())).toBe(originals[0].prompt);
+    await page.locator('#detailDialog').getByRole('button',{name:'中文',exact:true}).click();
+    expect(await page.locator('#detailPrompt').textContent()).toBe(translations['1']);
+    await page.keyboard.press('Meta+Enter');await expect.poll(()=>app.evaluate(({clipboard})=>clipboard.readText())).toBe(translations['1']);
+    await page.keyboard.press('Escape');
+    await page.locator('[data-filter="photo"]').click();await expect(page.locator('.portrait-card')).toHaveCount(8);
+    await page.locator('[data-filter="art"]').click();await expect(page.locator('.portrait-card')).toHaveCount(5);
+    await page.locator('#searchInput').fill('053');await expect(page.locator('.portrait-card')).toHaveCount(1);
+    await page.locator('.portrait-card').click();expect(await page.locator('#detailPrompt').textContent()).toBe(translations['53']);
+    await page.locator('#detailCopy').click();await expect.poll(()=>app.evaluate(({clipboard})=>clipboard.readText())).toBe(translations['53']);
+    await page.keyboard.press('Escape');await page.reload();
+    await expect(page.locator('.portrait-card')).toHaveCount(13);
+    await expect(page.locator('.toolbar').getByRole('button',{name:'中文',exact:true})).toHaveAttribute('aria-pressed','true');
+    checks.push('actual container application launch, sandbox and isolated profile','13 original images decode, 13/8/5 counts, both languages and real native copy','053 full Chinese revision, search/filter and language persistence');
+    expect(errors).toEqual([]);
+    const result={status:'passed',kind,executable,profile,security:{packaged:security.packaged,pid:security.pid},checks,errors};
+    fs.writeFileSync(path.join(root,'.verification',`${kind}-verification.json`),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result,null,2));
+  }finally{if(saved)await app.evaluate(({clipboard})=>clipboard.write(globalThis.__originalClipboard)).catch(()=>{});await app.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

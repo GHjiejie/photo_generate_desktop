@@ -1,4 +1,5 @@
 import { portraitNumber } from '../portraits.js';
+import PromptLanguage from './PromptLanguage.jsx';
 function PortraitCard({ item, index, copied, onOpen, onCopy }) {
   return <article className="portrait-card" tabIndex={0} aria-label={`${portraitNumber(item)} ${item.label}`} onClick={() => onOpen(item.id)} onKeyDown={event => {
     if (event.target !== event.currentTarget) return;
@@ -12,9 +13,9 @@ function PortraitCard({ item, index, copied, onOpen, onCopy }) {
     <div className="card-overlay"><div className="card-number">{portraitNumber(item)}</div><div className="card-title">{item.label}</div><div className="card-prompt-hint">点击查看完整提示词</div></div>
   </article>;
 }
-export default function Gallery({ items, dense, copiedId, onOpen, onCopy }) {
+export default function Gallery({ items, dense, copiedId, onOpen, onCopy, language, onLanguage }) {
   return <>
-    <div className="toolbar"><div className="result-count" id="resultCount">显示 {items.length} 张</div><div className="toolbar-note"><span className="legend-dot" />悬停图片可复制提示词</div></div>
+    <div className="toolbar"><div className="result-count" id="resultCount">显示 {items.length} 张</div><PromptLanguage language={language} onLanguage={onLanguage} /><div className="toolbar-note"><span className="legend-dot" />悬停图片可复制提示词</div></div>
     <section className={`gallery${dense ? ' dense' : ''}`} id="gallery" aria-live="polite">
       {items.map((item, index) => <PortraitCard key={item.id} item={item} index={index} copied={copiedId === item.id} onOpen={onOpen} onCopy={onCopy} />)}
     </section>

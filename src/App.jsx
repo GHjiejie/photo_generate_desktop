@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isPhoto, portraitNumber, portraits } from './portraits.js';
+import { isPhoto, portraitNumber, portraits, promptFor } from './portraits.js';
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
 import Gallery from './components/Gallery.jsx';
@@ -12,6 +12,10 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [toast, setToast] = useState('');
+  const [language, setLanguage] = useState(() => {
+    try { return localStorage.getItem('portraitStudio.promptLanguage') === 'zh' ? 'zh' : 'en'; }
+    catch { return 'en'; }
+  });
   const searchRef = useRef(null);
   const timers = useRef({});
   const visible = useMemo(() => {
@@ -25,6 +29,11 @@ export default function App() {
     timers.current.toast = setTimeout(() => setToast(''), 1900);
   }, []);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+  function changeLanguage(value) {
+    setLanguage(value);
+    setCopiedId(null);
+    try { localStorage.setItem('portraitStudio.promptLanguage', value); } catch { /* Storage may be unavailable; switching still works. */ }
+  }
   useEffect(() => {
     const onKey = event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); } };
     document.addEventListener('keydown', onKey);
@@ -33,14 +42,15 @@ export default function App() {
   async function copyPrompt(item, fromCard = false) {
     if (!item) return;
     try {
-      const copied = await window.portraitStudio?.copyText(item.prompt);
-      if (!copied) await navigator.clipboard.writeText(item.prompt);
+      const prompt = promptFor(item, language);
+      const copied = await window.portraitStudio?.copyText(prompt);
+      if (!copied) await navigator.clipboard.writeText(prompt);
       if (fromCard) {
         setCopiedId(item.id);
         clearTimeout(timers.current.copy);
         timers.current.copy = setTimeout(() => setCopiedId(null), 1500);
       }
-      showToast(`${portraitNumber(item)} · 完整提示词已复制`);
+      showToast(`${portraitNumber(item)} · ${language === 'zh' ? '中文' : '英文'}完整提示词已复制`);
     } catch { showToast('复制失败，请重试'); }
   }
   async function openImage(item) {
@@ -58,9 +68,9 @@ export default function App() {
   }
   return <>
     <div className="app-shell"><Sidebar portraits={portraits} activeFilter={activeFilter} onFilter={setActiveFilter} />
-      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} /><Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={setSelectedId} onCopy={copyPrompt} /></main>
+      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} /><Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={setSelectedId} onCopy={copyPrompt} language={language} onLanguage={changeLanguage} /></main>
     </div>
     <Toast message={toast} />
-    <DetailDialog item={selected} total={portraits.length} onClose={() => setSelectedId(null)} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} />
+    <DetailDialog item={selected} total={portraits.length} language={language} onLanguage={changeLanguage} onClose={() => setSelectedId(null)} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} />
   </>;
 }

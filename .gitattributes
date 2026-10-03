@@ -1,0 +1,2 @@
+# Only source portrait images use LFS; prompts and generated packages stay out.
+/assets/images/*.png filter=lfs diff=lfs merge=lfs -text

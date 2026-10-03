@@ -2,12 +2,12 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { version } = require('../package.json');
+const { version, build } = require('../package.json');
 
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('This release script targets Apple Silicon macOS.');
 }
-const output = path.resolve(__dirname,'../release-react');
+const output = path.resolve(__dirname,'..',build.directories.output);
 const app = path.join(output,'mac-arm64','Portrait Studio.app');
 const stem = `Portrait-Studio-React-${version}-arm64`;
 const staging = fs.mkdtempSync(path.join(os.tmpdir(),'portrait-dmg-'));
