@@ -19,6 +19,6 @@ export default function Gallery({ items, dense, copiedId, onOpen, onCopy, langua
     <section className={`gallery${dense ? ' dense' : ''}`} id="gallery" aria-live="polite">
       {items.map((item, index) => <PortraitCard key={item.id} item={item} index={index} copied={copiedId === item.id} onOpen={onOpen} onCopy={onCopy} />)}
     </section>
-    <div className="empty-state" id="emptyState" hidden={items.length !== 0}><div className="empty-symbol">⌁</div><h2>{configured && !query ? '素材库还没有肖像' : '没有找到匹配的肖像'}</h2><p>{configured && !query ? '点击左侧“新增肖像”，导入图片和中英提示词。' : '试试其他名称、编号或提示词。'}</p></div>
+    <div className="empty-state" id="emptyState" hidden={items.length !== 0}><div className="empty-symbol">⌁</div><h2>{configured && !query ? '素材库还没有肖像' : '没有找到匹配的肖像'}</h2><p>{configured && !query ? '点击左侧“导入图片与提示词”，选择本机图片并填写中英提示词。' : '试试其他名称、编号或提示词。'}</p></div>
   </>;
 }
