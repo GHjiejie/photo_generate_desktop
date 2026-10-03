@@ -112,3 +112,84 @@ kbd { padding: 3px 5px; border: 1px solid var(--line); border-radius: 4px; color
 .secondary-button:hover { color: var(--text); border-color: #5d536f; }
 .detail-hint { margin-top: 17px; color: var(--faint); font-size: 10px; }
 @media (max-width: 1260px) { .main-content { padding-inline: 30px; } .gallery { grid-template-columns: repeat(3, minmax(180px, 1fr)); } .gallery.dense { grid-template-columns: repeat(4, minmax(145px, 1fr)); } }
+
+button:disabled { cursor: default; opacity: .45; }
+.status-dot.readonly { background: #92909c; box-shadow: 0 0 0 4px rgba(146, 144, 156, .08); }
+.library-controls { display: grid; gap: 10px; }
+.library-location-help { padding: 0 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }
+.library-location-help strong { color: var(--muted); font-weight: 500; }
+.library-location-help p { margin: 4px 0 0; }
+.library-root { margin: -2px 8px 0; color: var(--faint); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.library-create { width: 100%; height: 36px; }
+.library-control-row { display: flex; gap: 8px; }
+.library-control-row .secondary-button { flex: 1; height: 33px; padding-inline: 9px; font-size: 10px; }
+.library-control-row .library-refresh { flex: 0 0 33px; padding: 0; font-size: 18px; }
+.library-notice { margin: -9px 0 23px; padding: 11px 13px; border: 1px solid #3a3546; border-radius: 9px; background: rgba(174, 142, 230, .06); color: var(--muted); font-size: 11px; line-height: 1.6; }
+.library-notice.error { border-color: #634047; color: #efbdc1; background: rgba(169, 90, 103, .08); }
+.detail-management { display: flex; justify-content: space-between; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.text-button { padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; }
+.text-button:hover { color: var(--accent); }
+.text-button.danger-text { color: #d6969d; }
+.text-button.danger-text:hover { color: #f2b4bb; }
+.management-dialog { width: min(980px, calc(100vw - 90px)); max-height: calc(100vh - 60px); padding: 28px; border: 1px solid #3a3b46; border-radius: 18px; background: var(--panel); color: var(--text); box-shadow: 0 30px 120px rgba(0,0,0,.55); overflow: auto; }
+.management-dialog::backdrop { background: rgba(7, 8, 10, .78); backdrop-filter: blur(7px); }
+.management-heading { position: relative; padding-right: 38px; }
+.management-heading h2 { margin: 10px 0 7px; font-size: 25px; letter-spacing: -.025em; }
+.management-heading p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.management-heading .dialog-close { top: -9px; right: -9px; }
+.editor-body { display: grid; grid-template-columns: 195px minmax(0, 1fr); gap: 26px; margin-top: 24px; }
+.editor-image-preview { aspect-ratio: 2 / 3; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #111216; }
+.editor-image-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.editor-image-placeholder { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--faint); font-size: 11px; }
+.editor-image-placeholder span { color: var(--accent); font-size: 28px; font-weight: 300; }
+.editor-image-column .secondary-button { width: 100%; height: 35px; margin-top: 12px; font-size: 11px; }
+.field-note { margin: 10px 2px 0; color: var(--faint); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.editor-fields { display: grid; gap: 14px; }
+.editor-fields label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }
+.editor-metadata { display: grid; grid-template-columns: 86px minmax(0, 1fr) 115px; gap: 12px; }
+.editor-fields input, .editor-fields select, .editor-fields textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #111216; color: var(--text); outline: 0; }
+.editor-fields input, .editor-fields select { height: 36px; padding: 0 10px; font: inherit; }
+.editor-fields textarea { min-height: 105px; height: clamp(105px, 18vh, 170px); padding: 11px 12px; resize: vertical; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.editor-fields input:focus, .editor-fields select:focus, .editor-fields textarea:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 2px var(--accent-wash); }
+.editor-fields input:disabled, .editor-fields select:disabled, .editor-fields textarea:disabled { opacity: .55; }
+.editor-fields textarea::placeholder { color: var(--faint); }
+.form-error { margin-top: 18px; padding: 11px 13px; border: 1px solid #634047; border-radius: 9px; background: rgba(169, 90, 103, .08); color: #efbdc1; font-size: 11px; line-height: 1.7; }
+.management-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.conflict-panel { margin-top: 14px; padding: 13px; border: 1px solid #5a506b; border-radius: 9px; background: var(--accent-wash); color: var(--muted); font-size: 11px; line-height: 1.7; }
+.conflict-panel p { margin: 0 0 10px; }
+.conflict-panel .secondary-button { height: 34px; font-size: 11px; }
+.conflict-record { margin-bottom: 12px; }
+.conflict-record strong { color: var(--text); font-weight: 500; }
+.conflict-record details { margin-top: 6px; }
+.conflict-record summary { color: var(--accent); cursor: pointer; }
+.conflict-record pre { max-height: 180px; margin: 8px 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111216; white-space: pre-wrap; font: 10px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.delete-dialog { width: 480px; }
+.delete-object { margin-top: 24px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #111216; font-size: 14px; }
+.delete-description { color: var(--muted); margin: 16px 0 0; font-size: 12px; line-height: 1.9; }
+.danger-button { height: 40px; padding: 0 15px; border: 1px solid #895661; border-radius: 9px; background: #57313b; color: #f6d7db; cursor: pointer; font-size: 12px; }
+.danger-button:hover { background: #6b3b47; }
+.app-update-button { width: 100%; height: 34px; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.app-update-button span { margin-right: 5px; color: var(--accent); font-size: 14px; }
+.update-dialog { width: min(560px, calc(100vw - 90px)); }
+.update-state-panel { margin-top: 24px; padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: #111216; }
+.update-state-panel > strong { color: var(--accent); font-size: 13px; font-weight: 600; }
+.update-state-panel > p { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.update-source { margin-top: 17px; }
+.update-source > span { color: var(--faint); font-size: 10px; }
+.update-source > div { margin-top: 5px; color: var(--muted); font: 10px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.update-version { margin-top: 16px; color: var(--muted); font-size: 12px; }
+.update-version strong { margin-left: 8px; color: var(--text); font-weight: 600; }
+.update-progress { display: grid; gap: 9px; margin-top: 16px; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.update-progress progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.update-release { margin-top: 20px; }
+.update-release h3 { color: var(--muted); margin: 0 0 9px; font-size: 11px; font-weight: 500; }
+.update-release pre { max-height: 210px; margin: 0; padding: 13px; border: 1px solid var(--line); border-radius: 9px; overflow: auto; background: #111216; color: #c9c8d0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.8; }
+.update-reasons { margin-top: 17px; padding: 11px 13px; border: 1px solid #4e445f; border-radius: 9px; background: var(--accent-wash); color: #cfc2e4; font-size: 11px; line-height: 1.8; }
+.update-reasons p { margin: 0; }
+.update-reasons p + p { margin-top: 6px; }
+.update-integrity-note { margin: 17px 0 0; color: var(--faint); font-size: 10px; line-height: 1.8; }
+.update-actions { flex-wrap: wrap; gap: 8px; }
+.update-actions button { height: 36px; padding-inline: 12px; font-size: 11px; }
+.update-confirmation { margin-top: 24px; }
+.update-confirmation > p { margin: 15px 0 0; color: var(--muted); font-size: 12px; line-height: 1.9; }
+.update-confirmation > .field-note { font-size: 10px; color: var(--faint); }

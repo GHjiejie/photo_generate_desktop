@@ -8,3 +8,6 @@ test-results/
 playwright-report/
 release-react/
 release-bilingual/
+release-local/
+release-update/
+.portrait-studio/

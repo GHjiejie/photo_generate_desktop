@@ -1,6 +1,6 @@
 {
   "name": "portrait-studio",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "A desktop gallery for curated AI portrait prompts",
   "main": "main.js",
   "private": true,
@@ -8,11 +8,12 @@
     "start": "npm run build && electron .",
     "dev": "vite",
     "build": "vite build",
-    "check": "node --check main.js && node --check preload.js && node --check electron-security.cjs && npm run build",
+    "check": "node --check main.js && node --check preload.js && node --check electron-security.cjs && node --check local-electron.cjs && node --check local-library.cjs && node --check update-electron.cjs && node --check update-service.cjs && node --check local-update-installer.cjs && npm run build",
     "test": "node --test tests/*.test.cjs",
-    "test:electron": "npm run build && node scripts/verify-electron.cjs",
+    "test:electron": "npm run build && node scripts/verify-crud.cjs",
+    "test:updates": "npm run build && node scripts/verify-updates.cjs",
     "package": "npm run build && electron-builder --dir --mac --arm64",
-    "dist:mac": "npm run package && node scripts/create-mac-artifacts.cjs"
+    "dist:mac": "npm run package && node scripts/create-mac-artifacts.cjs && node scripts/write-update-manifest.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
@@ -26,13 +27,18 @@
     "appId": "com.jie.portraitstudio",
     "productName": "Portrait Studio",
     "directories": {
-      "output": "release-bilingual"
+      "output": "release-update"
     },
     "asar": true,
     "files": [
       "main.js",
       "preload.js",
       "electron-security.cjs",
+      "local-electron.cjs",
+      "local-library.cjs",
+      "update-electron.cjs",
+      "update-service.cjs",
+      "local-update-installer.cjs",
       "renderer-dist/**/*",
       "assets/selected-prompts.json",
       "!node_modules/**/*"
