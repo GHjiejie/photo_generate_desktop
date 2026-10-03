@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+.DS_Store
+renderer-dist/
+.verification/
+test-results/
+playwright-report/
+release-react/

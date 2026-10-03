@@ -1,0 +1,72 @@
+{
+  "name": "portrait-studio",
+  "version": "1.1.0",
+  "description": "A desktop gallery for curated AI portrait prompts",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "npm run build && electron .",
+    "dev": "vite",
+    "build": "vite build",
+    "check": "node --check main.js && node --check preload.js && node --check electron-security.cjs && npm run build",
+    "test": "node --test tests/security.test.cjs",
+    "test:electron": "npm run build && node scripts/verify-electron.cjs",
+    "package": "npm run build && electron-builder --dir --mac --arm64",
+    "dist:mac": "npm run package && node scripts/create-mac-artifacts.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^42.11.10",
+    "electron-builder": "^26.0.12",
+    "pngjs": "^7.0.0",
+    "vite": "^8.3.2"
+  },
+  "build": {
+    "appId": "com.jie.portraitstudio",
+    "productName": "Portrait Studio",
+    "directories": {
+      "output": "release-react"
+    },
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "electron-security.cjs",
+      "renderer-dist/**/*",
+      "assets/selected-prompts.json",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/images",
+        "to": "portraits",
+        "filter": [
+          "*.png"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "notarize": false,
+      "artifactName": "Portrait-Studio-React-${version}-${arch}.${ext}"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "afterPack": "./scripts/sign-local.cjs"
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "googleapis": "^183.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}
