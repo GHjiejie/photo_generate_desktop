@@ -142,18 +142,28 @@ test('create, edit, image replacement and confirmed deletion persist real files 
   assert.deepEqual(await fs.readFile(f.source), originalBytes, 'importing leaves the selected source untouched');
 });
 
-test('legacy repository import preserves all 13 English, Chinese prompts and original image hashes across reopening', async t => {
+test('legacy repository fixture preserves all 13 English, Chinese prompts and source image hashes across reopening', async t => {
   const f = await fixture(t);
-  // An unconfigured legacy fixture is copied into an isolated repository. The
-  // application's real source assets are only ever read by this test.
+  // Read-only original references are copied into the temporary repository.
+  // Missing source references may be read from the sealed 1.4 app; code-only
+  // distributions skip this optional legacy-image check if neither is present.
+  // Never restore references to the user's source assets directory.
   const legacyRoot = path.join(f.temporary, 'legacy-repository');
   const imageDirectory = path.join(legacyRoot, 'assets', 'images');
   await fs.mkdir(imageDirectory, { recursive: true });
   await fs.writeFile(path.join(legacyRoot, 'assets', 'selected-prompts.json'), JSON.stringify(originals));
   await fs.writeFile(path.join(legacyRoot, 'assets', 'prompts.zh.json'), JSON.stringify(translations));
-  const hashes = {};
+  const hashes = {}, references = {};
   for (const original of originals) {
-    const bytes = await fs.readFile(path.join(project, 'assets', 'images', original.image));
+    let reference = path.join(project, 'assets', 'images', original.image);
+    if (!await fs.lstat(reference).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) {
+      reference = path.join(project, 'release/archives/1.4.0/runtime/mac-arm64/Portrait Studio.app/Contents/Resources/portraits', original.image);
+      if (!await fs.lstat(reference).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) {
+        t.skip(`原源图 ${original.id} 与已封存参考图均不可用；源码包不携带图库，不恢复素材。`); return;
+      }
+    }
+    references[original.image] = reference;
+    const bytes = await fs.readFile(reference);
     hashes[original.image] = digest(bytes);
     await fs.writeFile(path.join(imageDirectory, original.image), bytes);
   }
@@ -171,7 +181,7 @@ test('legacy repository import preserves all 13 English, Chinese prompts and ori
   assert.equal(reopened.items.length, 13);
   for (const original of originals) {
     assert.equal(digest(await fs.readFile(path.join(imageDirectory, original.image))), hashes[original.image]);
-    assert.equal(digest(await fs.readFile(path.join(project, 'assets', 'images', original.image))), hashes[original.image]);
+    assert.equal(digest(await fs.readFile(references[original.image])), hashes[original.image]);
   }
 });
 

@@ -1,9 +1,10 @@
-export default function Header({ query, onQuery, searchRef, dense, onToggleDensity }) {
+import { useI18n } from '../i18n.jsx';
+import LibraryMenu from './LibraryMenu.jsx';
+export default function Header({ query, onQuery, searchRef, dense, onToggleDensity, library, desktop, connected, editable, pending, onConfigure, onRefresh, onCreate, onBatch }) {
+  const { t } = useI18n();
   return <header className="topbar">
-    <div className="title-block"><div className="crumb">COLLECTION / PORTRAITS</div><h1>灵感肖像集</h1><p>每一张图，都对应一段可以直接复用的完整提示词。</p></div>
-    <div className="topbar-actions">
-      <label className="search-box"><span className="search-icon">⌕</span><input ref={searchRef} id="searchInput" type="search" aria-label="搜索风格或编号" placeholder="搜索风格或编号" autoComplete="off" value={query} onChange={event => onQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
-      <button className={`icon-button${dense ? ' active' : ''}`} id="gridToggle" type="button" aria-label="切换网格密度" aria-pressed={dense} title="切换网格密度" onClick={onToggleDensity}>▦</button>
-    </div>
+    <div className="search-actions"><label className="search-box"><svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg><input ref={searchRef} id="searchInput" type="search" aria-label={t('header.search')} placeholder={t('header.search')} autoComplete="off" value={query} onChange={event => onQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
+    <button className={`icon-button${dense ? ' active' : ''}`} id="gridToggle" type="button" aria-label={t('header.density')} aria-pressed={dense} title={t('header.density')} onClick={onToggleDensity}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg></button></div>
+    <LibraryMenu library={library} desktop={desktop} connected={connected} editable={editable} pending={pending} onConfigure={onConfigure} onRefresh={onRefresh} onCreate={onCreate} onBatch={onBatch} />
   </header>;
 }

@@ -6,8 +6,5 @@ renderer-dist/
 .verification/
 test-results/
 playwright-report/
-release-react/
-release-bilingual/
-release-local/
-release-update/
+photo_repo/
 .portrait-studio/

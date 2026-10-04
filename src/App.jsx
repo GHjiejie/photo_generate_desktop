@@ -1,28 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isPhoto, portraitNumber, portraits, promptFor } from './portraits.js';
+import { portraitNumber, promptFor } from './portraits.js';
+import { useI18n } from './i18n.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
 import Gallery from './components/Gallery.jsx';
 import DetailDialog from './components/DetailDialog.jsx';
 import PortraitEditor from './components/PortraitEditor.jsx';
 import DeleteConfirm from './components/DeleteConfirm.jsx';
-import UpdateDialog from './components/UpdateDialog.jsx';
+import BatchImportDialog from './components/BatchImportDialog.jsx';
 import Toast from './components/Toast.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
 function unwrap(result) {
   if (result?.ok) return result.data;
-  const error = new Error(result?.error?.message || '本地素材操作失败，请重试。');
+  const error = new Error(result?.error?.code || 'UNAVAILABLE');
   error.code = result?.error?.code || 'UNAVAILABLE';
   throw error;
 }
 export default function App() {
+  const { t, errorText, uiLanguage: language } = useI18n();
   const bridge = window.portraitStudio;
-  const desktop = typeof bridge?.libraryList === 'function';
+  const connected = typeof bridge?.libraryList === 'function';
+  const browserPreview = bridge?.mode === 'browser-preview';
+  const desktop = connected && !browserPreview;
   const [library, setLibrary] = useState(initialLibrary);
   const [libraryError, setLibraryError] = useState('');
-  const [pending, setPending] = useState(desktop ? 'loading' : '');
-  const [activeFilter, setActiveFilter] = useState('all');
+  const [pending, setPending] = useState(connected ? 'loading' : '');
   const [query, setQuery] = useState('');
   const [dense, setDense] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -31,23 +34,19 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [editor, setEditor] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [updatesOpen, setUpdatesOpen] = useState(false);
-  const [language, setLanguage] = useState(() => {
-    try { return localStorage.getItem('portraitStudio.promptLanguage') === 'zh' ? 'zh' : 'en'; }
-    catch { return 'en'; }
-  });
+  const [batchOpen, setBatchOpen] = useState(false);
   const searchRef = useRef(null);
   const timers = useRef({});
-  const busyRef = useRef(desktop);
+  const busyRef = useRef(connected);
   const selectionRequest = useRef(0);
   const editorSession = useRef(0);
-  const items = library.configured ? library.items : portraits;
+  const items = library.configured ? library.items : [];
   const visible = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return items.filter(item => (activeFilter === 'all' || (activeFilter === 'photo' ? isPhoto(item) : !isPhoto(item))) && (!term || `${item.id} ${item.label} ${item.image}`.toLowerCase().includes(term)));
-  }, [items, activeFilter, query]);
+    return items.filter(item => !term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn].filter(value => value != null).join(' ').toLowerCase().includes(term));
+  }, [items, query]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || updatesOpen);
+  const managing = Boolean(editor || deleteTarget || batchOpen);
   const canManage = desktop && library.configured && library.writable && !libraryError;
   const showToast = useCallback(message => {
     setToast(message);
@@ -60,25 +59,17 @@ export default function App() {
     if (snapshot.configured) setDetailItem(previous => previous ? snapshot.items.find(item => item.id === previous.id) ?? null : null);
   }, []);
   useEffect(() => {
-    if (!desktop) return;
+    if (!connected) return;
     let live = true;
     bridge.libraryList().then(result => {
       const snapshot = unwrap(result);
       if (live) applySnapshot(snapshot);
-    }).catch(error => { if (live) setLibraryError(error.message); }).finally(() => {
+    }).catch(error => { if (live) setLibraryError(error); }).finally(() => {
       if (live) { busyRef.current = false; setPending(''); }
     });
     return () => { live = false; };
-  }, [desktop, bridge, applySnapshot]);
+  }, [connected, bridge, applySnapshot]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
-  useEffect(() => {
-    if (!desktop || pending || typeof bridge.acknowledgeAppReady !== 'function') return;
-    let second;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => bridge.acknowledgeAppReady().catch(() => {}));
-    });
-    return () => { cancelAnimationFrame(first); if (second) cancelAnimationFrame(second); };
-  }, [desktop, pending, bridge]);
   async function exclusive(kind, action) {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -100,17 +91,16 @@ export default function App() {
         if (data.cancelled) return;
         closeDetail();
         applySnapshot(data);
-        setActiveFilter('all');
         setQuery('');
-        showToast(data.writable ? '已连接本地素材目录' : '素材目录已连接，但没有写入权限');
-      } catch (error) { setLibraryError(error.message); showToast(error.message); }
+        showToast({ key: data.writable ? 'app.connected' : 'app.connectedReadonly' });
+      } catch (error) { setLibraryError(error); showToast(error); }
     });
   }
   async function refreshLibrary() {
-    if (!desktop || managing) return;
+    if (!connected || managing) return;
     await exclusive('refresh', async () => {
-      try { await readSnapshot(); showToast('本地素材已刷新'); }
-      catch (error) { setLibraryError(error.message); showToast(error.message); }
+      try { await readSnapshot(); showToast({ key: 'app.refreshed' }); }
+      catch (error) { setLibraryError(error); showToast(error); }
     });
   }
   async function openDetail(id) {
@@ -119,13 +109,9 @@ export default function App() {
     try {
       const item = library.configured ? unwrap(await bridge.libraryGet(id)).item : items.find(value => value.id === id);
       if (request === selectionRequest.current && item) { setSelectedId(id); setDetailItem(item); }
-    } catch (error) { showToast(error.message); }
+    } catch (error) { showToast(error); }
   }
-  function changeLanguage(value) {
-    setLanguage(value);
-    setCopiedId(null);
-    try { localStorage.setItem('portraitStudio.promptLanguage', value); } catch { /* Switching still works when storage is unavailable. */ }
-  }
+  useEffect(() => { setCopiedId(null); }, [language]);
   useEffect(() => {
     const onKey = event => { if (!managing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); } };
     document.addEventListener('keydown', onKey);
@@ -142,17 +128,17 @@ export default function App() {
         clearTimeout(timers.current.copy);
         timers.current.copy = setTimeout(() => setCopiedId(null), 1500);
       }
-      showToast(`${portraitNumber(item)} · ${language === 'zh' ? '中文' : '英文'}完整提示词已复制`);
-    } catch { showToast('复制失败，请重试'); }
+      showToast({ key: 'app.promptCopied', params: { number: portraitNumber(item), languageKey: language === 'zh' ? 'app.chinese' : 'app.english' } });
+    } catch { showToast({ key: 'app.copyFailed' }); }
   }
   async function openImage(item) {
     if (!item) return;
     try {
       if (bridge) {
         const target = library.configured ? { id: item.id, revision: item.revision } : item.image;
-        if (!await bridge.openImage(target)) showToast('无法打开原图，请刷新素材后重试');
+        if (!await bridge.openImage(target)) showToast({ key: 'app.imageFailed' });
       } else { window.open(item.image_url, '_blank', 'noopener,noreferrer'); }
-    } catch { showToast('无法打开原图，请重试'); }
+    } catch { showToast({ key: 'app.imageFailed' }); }
   }
   function cycle(direction) {
     if (!selected || !visible.length || managing) return;
@@ -173,13 +159,13 @@ export default function App() {
         const current = unwrap(await bridge.libraryGet(item.id)).item;
         setDetailItem(current);
         setEditor({ session: ++editorSession.current, mode: 'edit', version: library.revision, item: current, itemRevision: current.revision, image: null, error: '', conflict: null });
-      } catch (error) { showToast(error.message); }
+      } catch (error) { showToast(error); }
     });
   }
   async function releaseSelection(token) {
     if (!token) return;
     try { unwrap(await bridge.releaseImage(token)); }
-    catch (error) { showToast(`待选图片清理失败：${error.message}`); }
+    catch (error) { showToast({ key: 'app.releaseFailed', params: { error } }); }
   }
   async function cancelEditor() {
     if (busyRef.current || !editor) return;
@@ -197,13 +183,13 @@ export default function App() {
           setEditor(previous => previous?.session === session ? { ...previous, image: data, error: '' } : previous);
           if (editor.image?.token !== data.token) await releaseSelection(editor.image?.token);
         }
-      } catch (error) { setEditor(previous => previous?.session === session ? { ...previous, error: error.message } : previous); }
+      } catch (error) { setEditor(previous => previous?.session === session ? { ...previous, error: error } : previous); }
     });
   }
   async function saveEditor(draft) {
     if (!editor || editor.conflict || !canManage) return;
-    if (!draft.label.trim() || !draft.prompts.en.trim() || !draft.prompts.zh.trim()) { setEditor(previous => ({ ...previous, error: '名称和中英完整提示词均不能为空。' })); return; }
-    if (editor.mode === 'create' && !editor.image) { setEditor(previous => ({ ...previous, error: '请先导入一张肖像图片。' })); return; }
+    if (!draft.label.trim() || !draft.prompts.en.trim() || !draft.prompts.zh.trim()) { setEditor(previous => ({ ...previous, error: { key: 'app.requiredFields' } })); return; }
+    if (editor.mode === 'create' && !editor.image) { setEditor(previous => ({ ...previous, error: { key: 'app.chooseImageFirst' } })); return; }
     const session = editor.session;
     await exclusive('save', async () => {
       try {
@@ -212,15 +198,15 @@ export default function App() {
         applySnapshot(snapshot);
         setEditor(null);
         await releaseSelection(editor.image?.token);
-        if (editor.mode === 'create') { setActiveFilter('all'); setQuery(''); }
-        showToast(editor.mode === 'edit' ? '肖像修改已保存到本地素材库' : '肖像已加入本地素材库');
+        if (editor.mode === 'create') { setQuery(''); }
+        showToast({ key: editor.mode === 'edit' ? 'app.edited' : 'app.created' });
       } catch (error) {
         let conflict = null;
         if (error.code === 'CONFLICT') {
           try { const snapshot = await readSnapshot(); conflict = { ...snapshot, item: snapshot.items.find(item => item.id === editor.item?.id) }; }
-          catch (refreshError) { setLibraryError(refreshError.message); }
+          catch (refreshError) { setLibraryError(refreshError); }
         }
-        setEditor(previous => previous?.session === session ? { ...previous, error: error.code === 'CONFLICT' ? `${error.message} 本次未保存，输入已保留，请核对最新记录。` : error.message, conflict, reviewOpen: false } : previous);
+        setEditor(previous => previous?.session === session ? { ...previous, error: error.code === 'CONFLICT' ? { key: 'app.editConflict' } : error, conflict, reviewOpen: false } : previous);
       }
     });
   }
@@ -234,7 +220,7 @@ export default function App() {
         const current = unwrap(await bridge.libraryGet(item.id)).item;
         setDetailItem(current);
         setDeleteTarget({ item: current, version: library.revision, error: '', conflicted: false });
-      } catch (error) { showToast(error.message); }
+      } catch (error) { showToast(error); }
     });
   }
   async function confirmDelete() {
@@ -245,27 +231,30 @@ export default function App() {
         closeDetail();
         applySnapshot(snapshot);
         setDeleteTarget(null);
-        showToast('图片已移到系统废纸篓，提示词和恢复记录已保留');
+        showToast({ key: 'app.deleted' });
       } catch (error) {
-        if (error.code === 'CONFLICT') { try { await readSnapshot(); } catch (refreshError) { setLibraryError(refreshError.message); } }
-        setDeleteTarget(previous => previous ? { ...previous, error: error.code === 'CONFLICT' ? '图库已更新，本次未删除。请取消后重新打开详情，核对这张肖像。' : error.message, conflicted: error.code === 'CONFLICT' } : previous);
+        if (error.code === 'CONFLICT') { try { await readSnapshot(); } catch (refreshError) { setLibraryError(refreshError); } }
+        setDeleteTarget(previous => previous ? { ...previous, error: error.code === 'CONFLICT' ? { key: 'app.deleteConflict' } : error, conflicted: error.code === 'CONFLICT' } : previous);
       }
     });
   }
   let notice = '';
-  if (libraryError) notice = `本地素材操作提示：${libraryError}`;
-  else if (pending === 'loading') notice = '正在读取本地素材目录…';
-  else if (!desktop) notice = '当前为网页预览，内置精选可浏览和复制。新增、编辑与删除请使用 Mac 桌面应用。';
-  else if (!library.configured) notice = '当前显示内置精选，素材只读。选择真实本地素材目录后，即可新增、编辑和移到废纸篓。';
-  else if (!library.writable) notice = '这个素材目录没有写入权限。可以浏览和复制，请选择可写目录后管理素材。';
+  if (libraryError) notice = t('app.libraryError', { error: errorText(libraryError) });
+  else if (pending === 'loading') notice = t('app.loading');
+  else if (!browserPreview) {
+    if (!desktop) notice = t('app.desktopRequired');
+    else if (!library.configured) notice = t('app.noLibrary');
+    else if (!library.writable) notice = t('app.readonly');
+  }
+  const toastText = toast?.key ? t(toast.key, { ...toast.params, ...(toast.params?.error ? { error: errorText(toast.params.error) } : {}), ...(toast.params?.languageKey ? { language: t(toast.params.languageKey) } : {}) }) : errorText(toast);
   return <>
-    <div className="app-shell"><Sidebar portraits={items} activeFilter={activeFilter} onFilter={setActiveFilter} library={library} desktop={desktop} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onUpdates={() => { if (!busyRef.current && !managing) setUpdatesOpen(true); }} />
-      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} language={language} onLanguage={changeLanguage} configured={library.configured} query={query} /></main>
+    <div className="app-shell"><Sidebar portraits={items} />
+      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={library} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} /></main>
     </div>
-    <Toast message={toast} />
-    <DetailDialog item={selected} total={items.length} language={language} onLanguage={changeLanguage} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete} />
+    <Toast message={toastText} />
+    <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
-    <UpdateDialog open={updatesOpen} onClose={() => setUpdatesOpen(false)} installationAllowed={!pending && !editor && !deleteTarget} />
+    <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />
   </>;
 }

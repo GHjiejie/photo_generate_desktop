@@ -3,6 +3,8 @@ const {constants}=require('node:fs');
 const path=require('node:path');
 const {randomUUID,createHash}=require('node:crypto');
 const {LocalLibrary,LibraryError}=require('./local-library.cjs');
+const {prepareBatchImport,revalidateBatchImport}=require('./batch-import.cjs');
+const {messageText,errorResult,publicIssue,publicUnpaired,publicBatchRow}=require('./localization.cjs');
 
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const plain=value=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
@@ -25,14 +27,23 @@ function imageMime(bytes){
   if(bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP')return 'image/webp';
   throw new LibraryError('INVALID_IMAGE','仅支持真实 PNG、JPEG 或 WebP 图片');
 }
-function errorResult(error){
-  const code=error.code||'IO_ERROR',permission=['EACCES','EPERM','EROFS'].includes(code);
-  return {ok:false,error:{code:permission?'PERMISSION_DENIED':code,message:permission?'没有目录或文件的读写权限':error instanceof LibraryError?error.message:'本地素材操作失败，请重试'}};
-}
-
-function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,BrowserWindow,rendererURL,trustedSender,sourceRoot}){
+function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,BrowserWindow,rendererURL,trustedSender,sourceRoot,defaultRoot,legacyRoot}){
   let library,generation=0,activeOperations=0,switching=false,startupError=null;
+  let liveLocale='zh';
+  const text=key=>messageText(key,liveLocale);
   const selections=new Map();
+  const batchImages=new Map(),batchManifests=new Map(),batchPreviews=new Map();
+  const batchToken=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const batchLifetime=30*60*1000;
+  function pruneBatch(){for(const map of [batchImages,batchManifests,batchPreviews])for(const [key,value]of map)if(value.generation!==generation||Date.now()-value.created>batchLifetime)map.delete(key);}
+  function batchPayload(value,keys){if(!plain(value)||Object.keys(value).some(key=>!keys.includes(key)))throw new LibraryError('INVALID_INPUT','批量导入参数无效');}
+  async function selectedBatch(map,token){
+    pruneBatch();const selected=typeof token==='string'&&batchToken.test(token)?map.get(token):null;
+    if(!selected)throw new LibraryError('INVALID_BATCH_SELECTION','请重新选择图片文件夹和提示词 JSON');
+    const current=await fs.lstat(selected.path);
+    if(current.isSymbolicLink()||current.dev!==selected.dev||current.ino!==selected.ino||await fs.realpath(selected.path)!==selected.path||selected.kind==='manifest'&&(!current.isFile()||current.size!==selected.size)||selected.kind==='images'&&!current.isDirectory())throw new LibraryError('CONFLICT','所选批量导入来源已变化，请重新选择');
+    return selected;
+  }
   function validateImage(bytes){
     imageMime(bytes);
     if(bytes.length>30*1024*1024)throw new LibraryError('INVALID_IMAGE','图片不能超过 30 MiB');
@@ -67,7 +78,7 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
     try{
       const candidate=newLibrary(),state=await candidate.open(root);
       if(persist)await saveRoot(state.root);
-      library=candidate;generation++;startupError=null;selections.clear();return decorate(state);
+      library=candidate;generation++;startupError=null;selections.clear();batchImages.clear();batchManifests.clear();batchPreviews.clear();return decorate(state);
     }finally{switching=false;}
   }
   async function selectedImage(token){
@@ -97,8 +108,8 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
   }
   function register(channel,handler){
     ipcMain.handle(channel,async(event,...args)=>{
-      if(!trustedSender(event,rendererURL))return {ok:false,error:{code:'FORBIDDEN',message:'请求来源无效'}};
-      try{return {ok:true,data:await handler(event,...args)};}catch(error){return errorResult(error);}
+      if(!trustedSender(event,rendererURL))return errorResult({code:'FORBIDDEN'},liveLocale);
+      try{return {ok:true,data:await handler(event,...args)};}catch(error){return errorResult(error,liveLocale);}
     });
   }
   async function mediaResponse(request){
@@ -124,7 +135,7 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
   async function initialise(){
     library=newLibrary();
     try{
-      let initial=process.env.PORTRAIT_STUDIO_LIBRARY_DIR;
+      let initial=process.env.PORTRAIT_STUDIO_LIBRARY_DIR,migrateDefault=false;
       if(initial&&!path.isAbsolute(initial))throw new LibraryError('INVALID_DIRECTORY','素材目录必须是绝对路径');
       if(!initial){
         const file=path.join(app.getPath('userData'),'library-config.json');
@@ -133,18 +144,23 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
           if(!stat.isFile()||stat.isSymbolicLink()||stat.size>16384)throw new LibraryError('INVALID_DIRECTORY','素材目录配置无效');
           const saved=JSON.parse(await fs.readFile(file,'utf8'));
           if(saved.version!==1||typeof saved.root!=='string'||!path.isAbsolute(saved.root))throw new LibraryError('INVALID_DIRECTORY','素材目录配置无效');
-          initial=saved.root;
-        }else if(!app.isPackaged)initial=sourceRoot;
+          initial=legacyRoot&&defaultRoot&&saved.root===legacyRoot?defaultRoot:saved.root;
+          migrateDefault=initial!==saved.root;
+        }else initial=defaultRoot||(!app.isPackaged?sourceRoot:null);
       }
-      if(initial)await configure(initial,false);
+      if(initial)await configure(initial,migrateDefault);
     }catch(error){startupError=error;}
     protocol.handle('portrait-media',mediaResponse);
+    register('library-ui-language',(_event,locale,...extra)=>{
+      if(extra.length||!['en','zh'].includes(locale))throw new LibraryError('INVALID_LOCALE','界面语言无效');
+      liveLocale=locale;return {locale};
+    });
     register('library-list',async()=>{if(startupError)throw startupError;return readLibrary('list',{refresh:true});});
     register('library-get',(_event,id)=>readLibrary('get',id));
     register('library-choose',async event=>{
       if(switching||activeOperations)throw new LibraryError('BUSY','正在处理素材，请稍后切换目录');
       activeOperations++;let result;
-      try{result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{title:'选择本地素材仓库',properties:['openDirectory','createDirectory']});}finally{activeOperations--;}
+      try{result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{title:text('native.libraryTitle'),message:text('native.libraryMessage'),buttonLabel:text('native.libraryButton'),properties:['openDirectory','createDirectory']});}finally{activeOperations--;}
       if(result.canceled||result.filePaths.length!==1)return {cancelled:true};return configure(result.filePaths[0]);
     });
     register('library-image-choose',async event=>{
@@ -152,7 +168,7 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
       if(!(await library.list()).configured)throw new LibraryError('NOT_CONFIGURED','请先选择本地素材目录');
       const captured=generation;activeOperations++;
       try{
-        const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{title:'选择肖像图片',properties:['openFile'],filters:[{name:'肖像图片',extensions:['png','jpg','jpeg','webp']}]});
+        const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{title:text('native.imageTitle'),message:text('native.imageMessage'),buttonLabel:text('native.imageButton'),properties:['openFile'],filters:[{name:text('native.imageFilter'),extensions:['png','jpg','jpeg','webp']}]});
         if(result.canceled||result.filePaths.length!==1)return {cancelled:true};
         const file=await fs.realpath(result.filePaths[0]),{bytes,stat}=await readSelected(file);validateImage(bytes);
         if(captured!==generation)throw new LibraryError('CONFLICT','素材目录已变化，请重新选择');
@@ -168,6 +184,70 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
     register('library-image-release',(_event,token)=>{
       if(typeof token!=='string'||!/^[0-9a-f-]{36}$/.test(token))throw new LibraryError('INVALID_INPUT','所选图片凭据无效');
       selections.delete(token);return {released:true};
+    });
+    async function chooseBatch(event,kind){
+      if(switching||activeOperations)throw new LibraryError('BUSY','正在处理素材，请稍后选择来源');
+      if(!(await library.list()).configured)throw new LibraryError('NOT_CONFIGURED','请先选择素材保存位置');
+      const captured=generation;activeOperations++;
+      try{
+        const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),kind==='images'?{title:text('native.batchImagesTitle'),message:text('native.batchImagesMessage'),buttonLabel:text('native.batchImagesButton'),properties:['openDirectory']}:{title:text('native.batchManifestTitle'),message:text('native.batchManifestMessage'),buttonLabel:text('native.batchManifestButton'),properties:['openFile'],filters:[{name:text('native.jsonFilter'),extensions:['json']}]});
+        if(result.canceled||result.filePaths.length!==1)return {cancelled:true};
+        const chosen=result.filePaths[0],stat=await fs.lstat(chosen);
+        if(stat.isSymbolicLink()||kind==='images'&&!stat.isDirectory()||kind==='manifest'&&(!stat.isFile()||!stat.size||stat.size>32*1024*1024||path.extname(chosen).toLowerCase()!=='.json'))throw new LibraryError('INVALID_BATCH_SELECTION','请选择真实的图片文件夹或有效的 JSON 文件');
+        const selectedPath=await fs.realpath(chosen),current=await fs.lstat(selectedPath);
+        if(current.dev!==stat.dev||current.ino!==stat.ino||captured!==generation)throw new LibraryError('CONFLICT','来源或素材库已变化，请重新选择');
+        pruneBatch();const map=kind==='images'?batchImages:batchManifests;
+        if(map.size>=64)throw new LibraryError('BUSY','待选来源过多，请关闭导入窗口后重试');
+        const selectionId=randomUUID();map.set(selectionId,{path:selectedPath,kind,dev:stat.dev,ino:stat.ino,size:stat.size,generation,created:Date.now()});
+        return {selectionId,path:selectedPath,name:path.basename(selectedPath)};
+      }finally{activeOperations--;}
+    }
+    register('library-batch-images-choose',event=>chooseBatch(event,'images'));
+    register('library-batch-manifest-choose',event=>chooseBatch(event,'manifest'));
+    register('library-batch-preview',async(_event,value)=>{
+      batchPayload(value,['imageSelectionId','manifestSelectionId','type']);
+      if(!['photo','art'].includes(value.type))throw new LibraryError('INVALID_INPUT','请选择本批次默认质感');
+      if(switching||activeOperations)throw new LibraryError('BUSY','正在处理素材，请稍后预览');
+      const captured=generation;activeOperations++;
+      try{
+        const images=await selectedBatch(batchImages,value.imageSelectionId),manifest=await selectedBatch(batchManifests,value.manifestSelectionId);
+        const plan=await prepareBatchImport({imageDirectory:images.path,manifestPath:manifest.path,type:value.type,validateImage});
+        const preview=await library.previewBatch(plan);
+        if(captured!==generation)throw new LibraryError('CONFLICT','素材库已变化，请重新预览');
+        pruneBatch();if(batchPreviews.size>=64)throw new LibraryError('BUSY','待确认批次过多，请关闭导入窗口后重试');
+        const previewId=randomUUID();batchPreviews.set(previewId,{plan,revision:preview.revision,generation,created:Date.now(),imageSelectionId:value.imageSelectionId,manifestSelectionId:value.manifestSelectionId});
+        const known=new Map(preview.records.map(row=>[row.recordIndex??plan.records.find(item=>item.id===row.id)?.recordIndex,row]));
+        const rows=plan.recordResults.map(row=>{
+          const target=known.get(row.index),source=plan.records.find(item=>item.recordIndex===row.index);
+          return publicBatchRow(row,target,source);
+        });
+        return {previewId,root:library.root,revision:preview.revision,type:value.type,sourceDirectory:plan.sourceDirectory,manifestPath:plan.manifestPath,manifestSha256:plan.manifestSha256,total:plan.counts.total,matched:plan.counts.matched,importable:preview.summary.importable,skipped:preview.summary.skipped,conflicts:preview.summary.conflicts,issues:plan.issues.map(publicIssue),unpaired:plan.unpaired.map(publicUnpaired),items:rows,canImport:preview.canImport};
+      }finally{activeOperations--;}
+    });
+    register('library-batch-commit',async(_event,value)=>{
+      batchPayload(value,['previewId','confirmed','expectedVersion']);
+      if(value.confirmed!==true)throw new LibraryError('CONFIRMATION_REQUIRED','请确认预览后再批量导入');
+      pruneBatch();const preview=typeof value.previewId==='string'&&batchToken.test(value.previewId)?batchPreviews.get(value.previewId):null;
+      if(!preview)throw new LibraryError('INVALID_BATCH_SELECTION','批次预览已过期，请重新预览');
+      if(!Number.isSafeInteger(value.expectedVersion)||value.expectedVersion!==preview.revision)throw new LibraryError('CONFLICT','素材库版本已变化，请重新预览');
+      if(switching||activeOperations)throw new LibraryError('BUSY','正在处理素材，请稍后导入');
+      const captured=generation;activeOperations++;
+      try{
+        await selectedBatch(batchImages,preview.imageSelectionId);await selectedBatch(batchManifests,preview.manifestSelectionId);
+        await revalidateBatchImport(preview.plan);
+        const state=await library.importBatch(preview.plan,{expectedVersion:value.expectedVersion,confirmed:true});
+        if(captured!==generation)throw new LibraryError('CONFLICT','素材库已变化，请重新载入');
+        const {batch,...snapshot}=state;
+        batchPreviews.delete(value.previewId);batchImages.delete(preview.imageSelectionId);batchManifests.delete(preview.manifestSelectionId);
+        return {snapshot:decorate(snapshot),report:batch};
+      }finally{activeOperations--;}
+    });
+    register('library-batch-cancel',(_event,value={})=>{
+      batchPayload(value,['previewId','imageSelectionId','manifestSelectionId']);
+      if(Object.values(value).some(token=>token!=null&&(typeof token!=='string'||!batchToken.test(token))))throw new LibraryError('INVALID_BATCH_SELECTION','批次凭据无效');
+      let released=0;
+      for(const [key,map]of [['previewId',batchPreviews],['imageSelectionId',batchImages],['manifestSelectionId',batchManifests]])if(value[key]!=null){if(typeof value[key]!=='string'||!batchToken.test(value[key]))throw new LibraryError('INVALID_BATCH_SELECTION','批次凭据无效');if(map.delete(value[key]))released++;}
+      return {released};
     });
   }
   async function imageToOpen(value){

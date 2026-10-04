@@ -57,6 +57,10 @@ function validateIndex(value) {
     if (mimeExtensions[item.mime] === 'png' && !/\.png$/i.test(item.image) || item.mime === 'image/jpeg' && !/\.jpe?g$/i.test(item.image) || item.mime === 'image/webp' && !/\.webp$/i.test(item.image)) {
       fail('INVALID_DATA', '素材图片格式与索引不一致。');
     }
+    if (Object.hasOwn(item, 'sourceMetadata') || Object.hasOwn(item, 'sourceImport')) {
+      const source = item.sourceImport;
+      if (!isObject(item.sourceMetadata) || !isObject(source) || !new RegExp(`^${META.replace('.', '\\.')}\\/imports\\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).test(source.archiveRel || '') || !HASH.test(source.manifestSha256 || '') || !HASH.test(source.sourceHash || '') || !Number.isSafeInteger(source.recordIndex) || source.recordIndex < 0 || source.recordIndex >= 500 || typeof source.sourceFileName !== 'string' || path.basename(source.sourceFileName) !== source.sourceFileName || !['source', 'selected-default'].includes(source.typeOrigin)) fail('INVALID_DATA', '批次素材来源信息无效，请保留索引检查。');
+    }
   }
   return value;
 }
@@ -75,6 +79,8 @@ function translateError(error) {
   if (error?.code === 'ENOSPC') return new LibraryError('IO_ERROR', '磁盘空间不足，操作已停止，请检查素材目录。', error);
   return new LibraryError('IO_ERROR', '本地文件操作失败，已尝试恢复原素材；请重试或检查目录。', error);
 }
+
+const batches = require('./library-batch-transaction.cjs')({ fs, constants, path, crypto, LibraryError, fail, sha, encode, clone, isObject, metadata, validateIndex, imageMime, MAX_IMAGE, MAX_INDEX, INDEX, META, UUID, HASH, NOFOLLOW, mimeExtensions });
 
 class LocalLibrary {
   constructor({ trashItem, validateImage, fault } = {}) {
@@ -169,6 +175,7 @@ class LocalLibrary {
       throw failed;
     }
     this.fileIdentities.delete(relative);
+    return { dev: owned.dev, ino: owned.ino };
   }
 
   async _read(relative, limit = MAX_INDEX) {
@@ -254,7 +261,7 @@ class LocalLibrary {
     if (!this.root) fail('NOT_CONFIGURED', '请先选择本地素材目录。');
     await this._safe(META, 'directory');
     const release = await this._acquireLock();
-    try { await this._recover(); return await task(); } finally { await release(); }
+    try { await this._recover(); await batches.recover(this); return await task(); } finally { await release(); }
   }
 
   async _image(item) {
@@ -275,7 +282,7 @@ class LocalLibrary {
   }
 
   _public(index) {
-    return { configured: true, root: this.root, writable: true, revision: index.revision, items: index.items.map(item => ({ id: item.id, label: item.label, type: item.type, prompts: clone(item.prompts), image: item.image, imageRel: item.imageRel, revision: item.revision, image_url: `portrait-media://asset/${item.id}?revision=${item.revision}` })) };
+    return { configured: true, root: this.root, writable: true, revision: index.revision, items: index.items.map(item => ({ id: item.id, label: item.label, type: item.type, prompts: clone(item.prompts), image: item.image, imageRel: item.imageRel, revision: item.revision, image_url: `portrait-media://asset/${item.id}?revision=${item.revision}`, ...(item.sourceMetadata ? { sourceMetadata: clone(item.sourceMetadata), sourceImport: clone(item.sourceImport) } : {}) })) };
   }
 
   async _seed() {
@@ -386,6 +393,8 @@ class LocalLibrary {
   create(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('create', payload, imagePath))); }
   update(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('update', payload, imagePath))); }
   remove(payload) { return this._enqueue(() => this._locked(() => this._mutate('remove', payload))); }
+  previewBatch(plan) { return this._enqueue(() => this._locked(() => batches.preview(this, plan))); }
+  importBatch(plan, options) { return this._enqueue(() => this._locked(() => batches.import(this, plan, options))); }
 
   async _fault(phase, journal) { if (this.fault) await this.fault(phase, { txId: journal.txId, operation: journal.operation, root: this.root }); }
 
@@ -418,7 +427,7 @@ class LocalLibrary {
     const txRel = `${META}/transactions/${txId}`;
     const createdAt = new Date().toISOString();
     const newImage = imported ? { image: `${String(payload.id).padStart(6, '0')}-${txId}.${mimeExtensions[imported.mime]}`, mime: imported.mime, size: imported.size, sha256: imported.sha256 } : oldItem;
-    const newItem = info ? { ...info, image: newImage.image, imageRel: `assets/images/${newImage.image}`, mime: newImage.mime, size: newImage.size, sha256: newImage.sha256, revision: oldItem ? oldItem.revision + 1 : 1 } : null;
+    const newItem = info ? { ...(oldItem?.sourceMetadata ? { sourceMetadata: clone(oldItem.sourceMetadata), sourceImport: clone(oldItem.sourceImport) } : {}), ...info, image: newImage.image, imageRel: `assets/images/${newImage.image}`, mime: newImage.mime, size: newImage.size, sha256: newImage.sha256, revision: oldItem ? oldItem.revision + 1 : 1 } : null;
     const after = { ...clone(before), revision: before.revision + 1, updatedAt: createdAt, items: before.items.filter(item => item.id !== payload.id).concat(newItem ? [newItem] : []).sort((a, b) => a.id - b.id) };
     validateIndex(after);
     const afterRaw = encode(after);
@@ -596,4 +605,4 @@ class LocalLibrary {
   }
 }
 
-module.exports = { LocalLibrary, LibraryError };
+module.exports = { LocalLibrary, LibraryError, validateIndex, imageMime };
