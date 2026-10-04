@@ -8,9 +8,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { validateIndex, imageMime } = require('./local-library.cjs');
 const { errorResult } = require('./localization.cjs');
-const defaults = require('./assets/default-library.json');
-
-const AUTHORIZED_ROOT = '/Users/jie/Github/photo_generate_desktop/photo_repo';
+// The development source root is selected by the Node-side adapter. HTTP never
+// accepts a root/path, and no desktop profile or saved root is read here.
+const AUTHORIZED_ROOT = path.join(__dirname, 'photo_repo');
 const PREVIEW_ORIGIN = 'http://127.0.0.1:5173';
 const PREVIEW_HOST = '127.0.0.1:5173';
 const MAX_INDEX = 32 * 1024 * 1024;
@@ -35,7 +35,7 @@ function sendJSON(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
-async function createPreviewLibrary({ root = defaults.root, expectedRoot = AUTHORIZED_ROOT } = {}) {
+async function createPreviewLibrary({ root = AUTHORIZED_ROOT, expectedRoot = AUTHORIZED_ROOT } = {}) {
   // The optional constructor arguments are used by isolated Node fixtures. They
   // are never exposed through HTTP; the Vite plugin always uses the fixed root.
   if (typeof root !== 'string' || !path.isAbsolute(root) || root !== expectedRoot || path.resolve(root) !== root) fail('INVALID_ROOT');
@@ -102,6 +102,7 @@ async function createPreviewLibrary({ root = defaults.root, expectedRoot = AUTHO
   function publicItem(item) {
     return { id: item.id, label: item.label, type: item.type, prompts: { en: item.prompts.en, zh: item.prompts.zh },
       image: item.image, imageRel: item.imageRel, revision: item.revision,
+      mime: item.mime, size: item.size, sha256: item.sha256,
       ...(item.sourceMetadata ? { sourceMetadata: item.sourceMetadata, sourceImport: item.sourceImport } : {}),
       image_url: `${API}images/${item.id}?revision=${item.revision}` };
   }
@@ -121,7 +122,7 @@ async function createPreviewLibrary({ root = defaults.root, expectedRoot = AUTHO
       if (url.origin !== PREVIEW_ORIGIN || url.pathname !== raw.split('?')[0]) fail('INVALID_INPUT');
       const index = await loadIndex();
       if (url.pathname === `${API}library` && !url.search) {
-        return sendJSON(response, 200, { ok: true, data: { configured: true, root, writable: false,
+        return sendJSON(response, 200, { ok: true, data: { configured: true, root, writable: false, backend: 'local', remote: false,
           revision: index.revision, items: index.items.map(publicItem) } });
       }
       const match = /^\/__preview\/api\/(portraits|images)\/([1-9]\d{0,5})$/.exec(url.pathname);

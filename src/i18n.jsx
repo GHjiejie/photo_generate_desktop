@@ -17,7 +17,10 @@ export function I18nProvider({ children }) {
     const saved = storage('portraitStudio.theme', 'dark');
     return validTheme(saved) ? saved : 'dark';
   });
-  const t = useCallback((key, params = {}) => interpolate(uiMessages[uiLanguage]?.[key] ?? systemMessages[uiLanguage]?.[key] ?? uiMessages.en?.[key] ?? key, params), [uiLanguage]);
+  const t = useCallback((key, params = {}) => {
+    const messageKey = window.portraitStudio?.backend === 'remote' && Object.hasOwn(uiMessages[uiLanguage], `remote.${key}`) ? `remote.${key}` : key;
+    return interpolate(uiMessages[uiLanguage]?.[messageKey] ?? systemMessages[uiLanguage]?.[key] ?? uiMessages.en?.[messageKey] ?? key, params);
+  }, [uiLanguage]);
   const errorText = useCallback(error => {
     if (!error) return '';
     if (typeof error === 'object' && error.key) return t(error.key, error.params);

@@ -8,3 +8,8 @@ test-results/
 playwright-report/
 photo_repo/
 .portrait-studio/
+.env
+.env.*
+!**/.env.example
+**/admin-auth.json
+**/admin-auth.env

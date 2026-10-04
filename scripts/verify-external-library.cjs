@@ -28,12 +28,17 @@ const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 const clone = value => JSON.parse(JSON.stringify(value));
 const updateMethods = ['getUpdateState', 'checkForUpdates', 'chooseUpdateSource', 'downloadUpdate', 'installUpdate', 'onUpdateState', 'acknowledgeAppReady'];
-let app, page, clipboardSaved = false, formalRoot, originalIndex, formalBefore, defaultSnapshots, newId;
+let app, page, formalRoot, originalIndex, formalBefore, defaultSnapshots, newId;
+const testSubstitutions = {
+  nativePicker: 'Only dialog.showOpenDialog selection results are queued; real IPC, source validation, repository operations and persistence remain in use. Interactive macOS picker operation is not tested.',
+  clipboard: 'Only this test-owned main-process clipboard.writeText/readText are replaced by an in-memory text buffer. The production copy IPC handler stays in use; the OS clipboard is never read or written.',
+  trash: 'shell.trashItem remains the real system Trash operation and is guarded to allow only paths inside the unique temporary repository copy.'
+};
 for (const directory of [output, defaultProfile, copyProfile, missingProfile, emptyRoot]) fs.mkdirSync(directory, { recursive: true });
 // Node 25 may surface a Playwright launch failure through an internal rejected
 // promise before the ordinary await catch. Preserve evidence even on that exit.
 process.on('uncaughtExceptionMonitor', error => {
-  fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, temporary, formalRoot, copyRoot, stage: app ? 'electron-verification' : 'electron-launch', security, itemChecks, clipboardChecks, screenshots, checks, errors, error: error.stack }));
+  fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, testSubstitutions, temporary, formalRoot, copyRoot, stage: app ? 'electron-verification' : 'electron-launch', security, itemChecks, clipboardChecks, screenshots, checks, errors, error: error.stack }));
 });
 
 function treeHashes(directory) {
@@ -87,10 +92,6 @@ async function state(root, length) {
 }
 async function closeOwnedApp() {
   if (!app) return;
-  if (clipboardSaved) {
-    await app.evaluate(({ clipboard }) => clipboard.write(globalThis.__portraitExternalClipboard)).catch(() => {});
-    clipboardSaved = false;
-  }
   await app.close();
   app = undefined;
 }
@@ -103,7 +104,9 @@ async function launch(profile, options = {}) {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await app.evaluate(({ clipboard, dialog, shell }, writableRoot) => {
-    globalThis.__portraitExternalClipboard = { text: clipboard.readText(), html: clipboard.readHTML(), rtf: clipboard.readRTF(), image: clipboard.readImage() };
+    globalThis.__portraitExternalClipboardText = '';
+    clipboard.writeText = text => { globalThis.__portraitExternalClipboardText = String(text); };
+    clipboard.readText = () => globalThis.__portraitExternalClipboardText;
     globalThis.__portraitExternalDialogs = [];
     globalThis.__portraitExternalTrash = [];
     dialog.showOpenDialog = async () => {
@@ -118,7 +121,6 @@ async function launch(profile, options = {}) {
       globalThis.__portraitExternalTrash.push({ file, success: true });
     };
   }, options.writableRoot ? fs.realpathSync(options.writableRoot) + path.sep : null);
-  clipboardSaved = true;
   const settings = await app.evaluate(({ BrowserWindow, app }) => {
     const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return { pid: process.pid, packaged: app.isPackaged, userData: app.getPath('userData'), resourcesPath: process.resourcesPath, appPath: app.getAppPath(), contextIsolation: preferences.contextIsolation, nodeIntegration: preferences.nodeIntegration, sandbox: preferences.sandbox, webSecurity: preferences.webSecurity };
@@ -128,6 +130,7 @@ async function launch(profile, options = {}) {
   expect(settings.sandbox).toBe(true); expect(settings.webSecurity).toBe(true);
   expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
   for (const method of updateMethods) expect(await page.evaluate(method => typeof window.portraitStudio[method], method)).toBe('undefined');
+  expect(await page.evaluate(() => window.portraitStudio.mode)).not.toBe('browser-preview');
   await expect(page.locator('#appUpdate')).toHaveCount(0);
   const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
   expect(csp).toContain("script-src 'self'"); expect(csp).toContain("connect-src 'none'");
@@ -149,12 +152,36 @@ async function selectDialog(file, action) {
   await app.evaluate((_electron, result) => globalThis.__portraitExternalDialogs.push(result), file ? { canceled: false, filePaths: [file] } : { canceled: true, filePaths: [] });
   await action();
   await expect.poll(() => app.evaluate(() => globalThis.__portraitExternalDialogs.length)).toBe(0);
-  const ready = await page.locator('#portraitEditor').isVisible() ? '#portraitChooseImage' : '#libraryConfigure';
-  await expect(page.locator(ready)).toBeEnabled();
+  if (await page.locator('#portraitEditor').isVisible()) await expect(page.locator('#portraitChooseImage')).toBeEnabled();
+  else { await openLibraryMenu(); await expect(page.locator('#libraryConfigure')).toBeEnabled(); await closeLibraryMenu(); }
 }
-const languageName = language => language === 'zh' ? '中文' : 'English';
-const galleryLanguage = () => page.locator('.toolbar').getByRole('group', { name: '提示词语言' });
-function card(id) { return page.locator('.portrait-card').filter({ has: page.locator('.card-number', { hasText: new RegExp(`^${String(id).padStart(3, '0')}$`) }) }); }
+async function openLibraryMenu() {
+  if (!await page.locator('#libraryMenuPanel').isVisible()) await page.locator('#libraryMenuToggle').click();
+  await expect(page.locator('#libraryMenuPanel')).toBeVisible();
+}
+async function closeLibraryMenu() {
+  if (await page.locator('#libraryMenuPanel').isVisible()) await page.locator('#libraryMenuToggle').click();
+  await expect(page.locator('#libraryMenuPanel')).toHaveCount(0);
+}
+async function libraryAction(id) {
+  await openLibraryMenu();
+  await expect(page.locator(`#${id}`)).toBeEnabled();
+  await page.locator(`#${id}`).click();
+}
+async function setLanguage(language) {
+  if (!await page.locator('#settingsPanel').isVisible()) await page.locator('#settingsToggle').click();
+  await page.locator(`#uiLanguage button[data-language="${language}"]`).click();
+  await expect(page.locator(`#uiLanguage button[data-language="${language}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#settingsToggle').click();
+  await expect(page.locator('#settingsPanel')).toHaveCount(0);
+  await expect(page.locator('html')).toHaveAttribute('lang', language === 'zh' ? 'zh-CN' : 'en');
+}
+async function assertLanguage(language) {
+  await page.locator('#settingsToggle').click();
+  await expect(page.locator(`#uiLanguage button[data-language="${language}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#settingsToggle').click();
+}
+function card(id) { return page.locator(`.portrait-card[data-id="${id}"]`); }
 async function copy(action, expected, label) {
   await app.evaluate(({ clipboard }, value) => clipboard.writeText(value), `Portrait external clipboard sentinel ${clipboardChecks.length}`);
   await action();
@@ -208,7 +235,7 @@ async function fillEditor(value) {
   await expect(page.locator('#portraitEditor')).toBeVisible();
   if (value.id !== undefined) await page.locator('#portraitId').fill(String(value.id));
   if (value.label !== undefined) await page.locator('#portraitLabel').fill(value.label);
-  if (value.type !== undefined) await page.locator('#portraitType').selectOption(value.type);
+  await expect(page.locator('#portraitType')).toHaveCount(0);
   if (value.prompts) {
     await page.locator('#portraitPromptEn').fill(value.prompts.en);
     await page.locator('#portraitPromptZh').fill(value.prompts.zh);
@@ -243,7 +270,10 @@ async function fillEditor(value) {
     await launch(defaultProfile);
     await expect(page.locator('.portrait-card')).toHaveCount(50);
     let current = await state(formalRoot, 50);
+    await openLibraryMenu();
     await expect(page.locator('#libraryRoot')).toContainText(formalRoot);
+    for (const id of ['libraryCreate', 'libraryConfigure', 'libraryBatch']) await expect(page.locator(`#${id}`), `${id} is enabled in desktop build`).toBeEnabled();
+    await closeLibraryMenu();
     for (const original of originalIndex.items) {
       const fetched = await bridge('libraryGet', original.id);
       expect(fetched.ok).toBe(true);
@@ -258,7 +288,7 @@ async function fillEditor(value) {
     for (const id of [1, 25, 50]) {
       const item = originalIndex.items.find(row => row.id === id);
       for (const language of ['en', 'zh']) {
-        await galleryLanguage().getByRole('button', { name: languageName(language), exact: true }).click();
+        await setLanguage(language);
         const expected = item.prompts[language];
         await copy(() => card(id).locator('.copy-button').click(), expected, `${id} ${language} card button`);
         await expect(page.locator('#detailDialog')).not.toBeVisible();
@@ -274,14 +304,14 @@ async function fillEditor(value) {
     }
     expect((await bridge('libraryGet', '../escape')).ok).toBe(false);
     expect(await bridge('openImage', '/etc/passwd')).toBe(false);
-    checks.push('IDs 1, 25 and 50 retain their exact English/Chinese prompt bytes across all four native clipboard entry points; invalid IPC IDs and paths rejected');
+    checks.push('IDs 1, 25 and 50 retain exact English/Chinese prompt bytes across all four production copy IPC entry points captured in the test-owned main-process memory buffer; invalid IPC IDs and paths rejected');
     await closeOwnedApp(); assertFormalUnchanged();
     await launch(defaultProfile);
     await expect(page.locator('.portrait-card')).toHaveCount(50);
     current = await state(formalRoot, 50);
     expect(current.revision).toBe(originalIndex.revision);
-    await expect(galleryLanguage().getByRole('button', { name: '中文', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await selectDialog(formalRoot, () => page.locator('#libraryConfigure').click());
+    await assertLanguage('zh');
+    await selectDialog(formalRoot, () => libraryAction('libraryConfigure'));
     await expect(page.locator('.portrait-card')).toHaveCount(50);
     expect(JSON.parse(fs.readFileSync(path.join(defaultProfile, 'library-config.json'), 'utf8')).root).toBe(formalRoot);
     await closeOwnedApp(); assertFormalUnchanged();
@@ -300,12 +330,22 @@ async function fillEditor(value) {
     const importedHash = sha(fs.readFileSync(importedImage));
     await launch(copyProfile, { libraryRoot: copyRoot, writableRoot: copyRoot });
     await expect(page.locator('.portrait-card')).toHaveCount(50);
-    await selectDialog(copyRoot, () => page.locator('#libraryConfigure').click());
+    await selectDialog(copyRoot, () => libraryAction('libraryConfigure'));
     current = await state(copyRoot, 50);
     newId = Math.max(...current.items.map(item => item.id)) + 1;
     expect(newId).toBeLessThanOrEqual(999999);
     const created = { id: newId, label: '外部图库隔离新增验证', type: 'photo', prompts: { en: 'Isolated external-library create verification: preserve this entire English prompt, including age 28, an 85 mm lens, and no letters or watermark.', zh: '外部图库隔离新增验证：完整保留这段中文提示词，包含 28 岁、85 毫米镜头，不要文字或水印。' } };
-    await page.locator('#libraryCreate').click();
+    const beforeCancelledImport = treeHashes(copyRoot);
+    await libraryAction('libraryCreate');
+    await fillEditor(created);
+    await selectDialog(null, () => page.locator('#portraitChooseImage').click());
+    expect(treeHashes(copyRoot)).toEqual(beforeCancelledImport);
+    await selectDialog(importedImage, () => page.locator('#portraitChooseImage').click());
+    await page.locator('#portraitCancel').click();
+    await expect(page.locator('#portraitEditor')).not.toBeVisible();
+    expect(treeHashes(copyRoot)).toEqual(beforeCancelledImport);
+    checks.push('canceling the native image picker and canceling a populated import editor leave the isolated repository byte-identical');
+    await libraryAction('libraryCreate');
     await fillEditor(created);
     await selectDialog(importedImage, () => page.locator('#portraitChooseImage').click());
     await expect(page.locator('#portraitId')).toHaveValue(String(newId));
@@ -315,7 +355,7 @@ async function fillEditor(value) {
     const createdStored = storedImage(copyRoot, newId);
     expect(createdStored.sha256).toBe(importedHash); expect(createdStored.item.prompts).toEqual(created.prompts);
     const beforeEdit = clone(storedImage(copyRoot, 25).item);
-    const edited = { label: `${beforeEdit.label} · 隔离编辑验证`, type: beforeEdit.type === 'photo' ? 'art' : 'photo', prompts: { en: `${beforeEdit.prompts.en}\n\nIsolated edit verification: keep all preceding text intact.`, zh: `${beforeEdit.prompts.zh}\n\n隔离编辑验证：完整保留以上所有内容。` } };
+    const edited = { label: `${beforeEdit.label} · 隔离编辑验证`, type: beforeEdit.type, prompts: { en: `${beforeEdit.prompts.en}\n\nIsolated edit verification: keep all preceding text intact.`, zh: `${beforeEdit.prompts.zh}\n\n隔离编辑验证：完整保留以上所有内容。` } };
     await card(25).click();
     await expect(page.locator('#detailDialog')).toBeVisible();
     await page.locator('#detailEdit').click(); await fillEditor(edited);
@@ -324,13 +364,15 @@ async function fillEditor(value) {
     expect(afterEdit.prompts).toEqual(edited.prompts); expect(afterEdit.label).toBe(edited.label); expect(afterEdit.type).toBe(edited.type);
     expect(afterEdit.sourceMetadata).toEqual(beforeEdit.sourceMetadata); expect(afterEdit.sourceImport).toEqual(beforeEdit.sourceImport);
     expect(afterEdit.sha256).toBe(beforeEdit.sha256);
-    const detailLanguage = page.locator('#detailDialog').getByRole('group', { name: '提示词语言' });
+    await page.keyboard.press('Escape');
     for (const language of ['en', 'zh']) {
-      await detailLanguage.getByRole('button', { name: languageName(language), exact: true }).click();
+      await setLanguage(language);
+      await card(25).click();
+      await expect(page.locator('#detailDialog')).toBeVisible();
       expect(await page.locator('#detailPrompt').textContent()).toBe(edited.prompts[language]);
       await copy(() => page.locator('#detailCopy').click(), edited.prompts[language], `edited 25 ${language} full prompt`);
+      await page.keyboard.press('Escape');
     }
-    await page.keyboard.press('Escape');
     await card(newId).click(); await expect(page.locator('#detailDialog')).toBeVisible();
     await page.locator('#detailDelete').click();
     await expect(page.locator('#deleteConfirmDialog')).toBeVisible();
@@ -370,15 +412,16 @@ async function fillEditor(value) {
     await expect(page.locator('.portrait-image')).toHaveCount(0);
     await expect(page.locator('#emptyState')).toBeVisible();
     await expect(page.locator('#emptyState')).toContainText('请选择素材保存文件夹');
+    await openLibraryMenu();
     await expect(page.locator('#libraryConfigure')).toBeEnabled();
     await expect(page.locator('#libraryBatch')).toBeDisabled();
     expect((await bridge('libraryList')).ok).toBe(false);
-    await selectDialog(emptyRoot, () => page.locator('#libraryConfigure').click());
+    await closeLibraryMenu();
+    await selectDialog(emptyRoot, () => libraryAction('libraryConfigure'));
     await expect(page.locator('#libraryNotice')).toHaveCount(0);
     await expect(page.locator('.portrait-card')).toHaveCount(0);
     await state(emptyRoot, 0);
-    await expect(page.locator('#libraryBatch')).toBeEnabled();
-    await page.locator('#libraryBatch').click(); await expect(page.locator('#batchImportDialog')).toBeVisible();
+    await libraryAction('libraryBatch'); await expect(page.locator('#batchImportDialog')).toBeVisible();
     await expect(page.locator('#batchChooseImages')).toBeEnabled(); await expect(page.locator('#batchChooseManifest')).toBeEnabled();
     await page.locator('#batchCancel').click(); await expect(page.locator('#batchImportDialog')).not.toBeVisible();
     const filename = `${kind}-missing-reconnected-empty-1440x920.png`;
@@ -388,15 +431,15 @@ async function fillEditor(value) {
     await closeOwnedApp();
     await launch(missingProfile);
     await expect(page.locator('.portrait-card')).toHaveCount(0); await state(emptyRoot, 0);
-    await expect(page.locator('#libraryBatch')).toBeEnabled();
+    await openLibraryMenu(); await expect(page.locator('#libraryBatch')).toBeEnabled(); await closeLibraryMenu();
     await closeOwnedApp(); assertFormalUnchanged();
     checks.push('missing remembered directory clearly reports an error and zero cards without bundled fallback; native choice of an empty writable folder enables batch import and persists through restart');
     expect(errors).toEqual([]);
-    const report = { status: 'passed', version, kind, executable: executable || require('electron'), scope: 'real default library read-only; every mutation and Trash call confined to a full temporary copy', temporary, formalRoot, copyRoot, profiles: { defaultProfile, copyProfile, missingProfile }, unchangedFormalFiles: Object.keys(formalBefore).length, formalBefore, defaultSnapshots, itemChecks, nativeSizes, imageDecoding, security, clipboardChecks, screenshots, checks, errors };
+    const report = { status: 'passed', version, kind, executable: executable || require('electron'), scope: 'real default library read-only; every mutation and Trash call confined to a full temporary copy', testSubstitutions, temporary, formalRoot, copyRoot, profiles: { defaultProfile, copyProfile, missingProfile }, unchangedFormalFiles: Object.keys(formalBefore).length, formalBefore, defaultSnapshots, itemChecks, nativeSizes, imageDecoding, security, clipboardChecks, screenshots, checks, errors };
     fs.writeFileSync(path.join(output, `${kind}-verification.json`), json(report));
     console.log(json({ status: report.status, version, kind, report: path.join(output, `${kind}-verification.json`), checkedItems: itemChecks.length, clipboardChecks: clipboardChecks.length, screenshots, checks, errors }));
   } catch (error) {
-    fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, temporary, formalRoot, copyRoot, security, itemChecks, imageDecoding, clipboardChecks, screenshots, checks, errors, error: error.stack }));
+    fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, testSubstitutions, temporary, formalRoot, copyRoot, security, itemChecks, imageDecoding, clipboardChecks, screenshots, checks, errors, error: error.stack }));
     throw error;
   } finally { await closeOwnedApp(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

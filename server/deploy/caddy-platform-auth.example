@@ -1,0 +1,18 @@
+# Review-only input for a NEW dedicated HTTPS host; not applied by the assistant.
+# Keep all existing dashboard and other site blocks unchanged, including Basic auth.
+portrait-18-180-65-241.sslip.io {
+    handle_path /portrait-studio/* {
+        reverse_proxy 127.0.0.1:4137 {
+            header_up Host 127.0.0.1:4137
+        }
+    }
+    # No fallback to another site, local files, or the gallery without Go auth.
+    handle {
+        respond "Not found" 404
+    }
+}
+
+# The Go service permits only health/auth bootstrap endpoints anonymously.
+# Every gallery/image/mutation/upload/batch request requires its platform token.
+# Do not paste this inside a site-wide Basic-auth block: that would still ask for
+# the previous site's credentials before the platform login API can be reached.

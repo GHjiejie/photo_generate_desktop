@@ -1,0 +1,55 @@
+{
+  "authentication": {
+    "initialization": "separate-user-ssh-tty",
+    "passwordInScript": false,
+    "username": "admin"
+  },
+  "caddy": {
+    "approval": "exact-candidate-sha256",
+    "existingAuthenticationUnchanged": true,
+    "newHostOnly": true
+  },
+  "endpoint": "https://portrait-18-180-65-241.sslip.io/portrait-studio/",
+  "files": {
+    "server/deploy/platform_admin/archive_validation.py": {
+      "sha256": "d575879bc242742494f21f92e29c344d95b1e3cfd904c593f2a0f9fb53d227d5",
+      "size": 14751
+    },
+    "server/deploy/platform_admin/caddy_review.py": {
+      "sha256": "04878ccd8b418bf2b6574dc7124d52d41ddcd3ca98d6265c18080885d755c7e0",
+      "size": 17437
+    },
+    "server/deploy/platform_admin/deploy_from_mac.py": {
+      "sha256": "b15fe6021844102169085b6d96e9e265ca676d85aafc8e9361381a41cc7a30bd",
+      "size": 26951
+    },
+    "server/deploy/platform_admin/deploy_server.py": {
+      "sha256": "58e44d7ac77ec3b93446eea7883da62539f1be9f47bf8cad0c21cf4d2f94b973",
+      "size": 31505
+    },
+    "server/deploy/platform_admin/portrait-studio.service": {
+      "sha256": "fc36ac582db511a17368d1be33c3b62250d613250a2a1422c03d9ada241fe084",
+      "size": 952
+    },
+    "server/dist/Portrait-Studio-Server-platform-auth-20261004-r1/bin/portrait-server": {
+      "sha256": "6709933dde619ec7300bfa42ac1bf4f05e0d78d93afc7e23a91be122f1d43b28",
+      "size": 7164066
+    },
+    "server/dist/Portrait-Studio-Server-platform-auth-20261004-r1/release-manifest.json": {
+      "sha256": "febe878ec0b192e9cb6529205674c72c062d935e6ec4dc6aab71d6ca2bdef179",
+      "size": 9786
+    }
+  },
+  "library": {
+    "archiveSha256": "390cc75dde3c6f44aad0e12ff6a840423ff1199fb9be6867c7b3678e5d2d0799",
+    "archiveSize": 227072304,
+    "count": 100,
+    "external": true,
+    "manifestSha256": "752120a072a348add59ff06024649dcc841375a4e7b018b8c3e6a4fcf3630f76",
+    "revision": 3,
+    "root": "photo_repo"
+  },
+  "releaseVersion": "platform-auth-20261004-r1",
+  "schemaVersion": 2,
+  "target": "ubuntu@18.180.65.241"
+}

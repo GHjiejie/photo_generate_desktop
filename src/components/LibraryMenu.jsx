@@ -24,16 +24,19 @@ export default function LibraryMenu({ library, desktop, connected, editable, pen
     flushSync(() => setOpen(false));
     action();
   }
-  const canEdit = Boolean(editable && !pending), canConfigure = Boolean(desktop && !pending), canRefresh = Boolean(connected && !pending);
+  const configured = library?.configured === true && library?.connected !== false;
+  const canEdit = Boolean(desktop && configured && library?.writable && editable && !pending), canConfigure = Boolean(desktop && !pending), canRefresh = Boolean(connected && !pending);
   const desktopTitle = !desktop ? t('common.desktopOnly') : undefined;
+  const remote = library?.remote === true || library?.backend === 'remote';
+  const location = remote ? t('sidebar.serverLocation') : library?.root;
   return <div ref={controlRef} className="library-menu-control">
     <button ref={triggerRef} id="libraryMenuToggle" className="library-menu-trigger icon-button" type="button" aria-label={t('library.manage')} title={t('library.manage')} aria-haspopup="dialog" aria-expanded={open} aria-controls="libraryMenuPanel" onClick={() => setOpen(value => !value)}><Icon name="folder" /></button>
     {open && <div ref={panelRef} id="libraryMenuPanel" className="library-menu-panel" role="dialog" aria-modal="false" aria-labelledby="libraryMenuTitle">
       <div className="library-menu-heading"><h2 id="libraryMenuTitle">{t('library.manage')}</h2><button className="library-menu-close" type="button" aria-label={t('common.close')} title={t('common.close')} onClick={() => setOpen(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
-      <div id="libraryStatus" className="library-menu-status"><span className={`status-dot${!library?.configured || !library?.writable ? ' readonly' : ''}`} />{t(library?.configured ? library.writable ? 'sidebar.editable' : 'sidebar.readonly' : 'sidebar.disconnected')}</div>
-      {library?.configured && <div id="libraryRoot" className="library-root" title={library.root}>{library.root}</div>}
+      <div id="libraryStatus" className="library-menu-status"><span className={`status-dot${!configured || !library?.writable ? ' readonly' : ''}`} />{t(library?.connectionStatus && library.connectionStatus !== 'connected' ? `connection.status.${library.connectionStatus}` : configured ? library.writable ? 'sidebar.editable' : 'sidebar.readonly' : 'sidebar.disconnected')}</div>
+      {configured && <div id="libraryRoot" className="library-root" title={location}>{location}</div>}
       <div className="library-menu-actions"><button id="libraryCreate" className="library-menu-action" type="button" disabled={!canEdit} title={desktopTitle} onClick={() => perform(canEdit, onCreate)}><Icon name="image" /><span>{t('library.import')}</span></button>
-      <button id="libraryConfigure" className="library-menu-action" type="button" disabled={!canConfigure} title={desktopTitle} onClick={() => perform(canConfigure, onConfigure)}><Icon name="folder" /><span>{t(library?.configured ? 'sidebar.switch' : 'sidebar.choose')}</span></button>
+      <button id="libraryConfigure" className="library-menu-action" type="button" disabled={!canConfigure} title={desktopTitle} onClick={() => perform(canConfigure, onConfigure)}><Icon name="folder" /><span>{t(configured ? 'sidebar.switch' : 'sidebar.choose')}</span></button>
       <button id="libraryBatch" className="library-menu-action" type="button" disabled={!canEdit} title={desktopTitle} onClick={() => perform(canEdit, onBatch)}><Icon name="batch" /><span>{t('sidebar.batch')}</span></button>
       <button id="libraryRefresh" className="library-menu-action" type="button" disabled={!canRefresh} onClick={() => perform(canRefresh, onRefresh)}><Icon name="refresh" /><span>{t('sidebar.refresh')}</span></button></div>
     </div>}

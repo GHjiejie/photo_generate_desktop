@@ -1,0 +1,7 @@
+# Review inside the existing authenticated HTTPS site before applying.
+# Every request to this prefix must pass the site's existing authentication.
+handle_path /portrait-studio/* {
+    reverse_proxy 127.0.0.1:4137 {
+        header_up Host 127.0.0.1:4137
+    }
+}

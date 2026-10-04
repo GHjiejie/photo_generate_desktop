@@ -8,6 +8,7 @@ if (import.meta.env.DEV && !window.portraitStudio) {
   };
   window.portraitStudio = Object.freeze({
     mode: 'browser-preview',
+    backend: typeof __PORTRAIT_STUDIO_PREVIEW_BACKEND__ === 'undefined' ? 'local' : __PORTRAIT_STUDIO_PREVIEW_BACKEND__,
     libraryList: () => request('/__preview/api/library'),
     libraryGet: id => Number.isSafeInteger(id) && id >= 1 && id <= 999999
       ? request(`/__preview/api/portraits/${id}`)

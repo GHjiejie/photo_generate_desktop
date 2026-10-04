@@ -13,8 +13,13 @@ const requestedKind = process.env.PORTRAIT_STUDIO_VERIFICATION_NAME || `${execut
 if (!/^[a-zA-Z0-9._-]+$/.test(requestedKind)) throw new Error('Verification name must be a plain filename component');
 const kind = requestedKind.startsWith('batch-') ? requestedKind : `batch-${requestedKind}`;
 const output = path.join(project, '.verification');
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), `portrait-${kind}-`));
+// macOS os.tmpdir() can use the /var alias. The scanner intentionally rejects
+// symlink ancestors, so the test fixture and queued picker path must be canonical.
+const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `portrait-${kind}-`)));
 const sourceDirectory = path.join(temporary, 'fixture-source');
+const sourceImageDirectory = path.join(sourceDirectory, 'images');
+const singleDirectory = path.join(temporary, 'single-manifest-source');
+const singleImageDirectory = path.join(singleDirectory, 'images');
 const libraryRoot = path.join(temporary, 'isolated-repository');
 const profile = path.join(temporary, 'isolated-profile');
 const indexPath = path.join(libraryRoot, '.portrait-studio', 'library.json');
@@ -27,9 +32,13 @@ const screenshots = [];
 const security = [];
 const errors = [];
 const previews = [];
+const directoryChecks = [];
 let app;
 let page;
-let clipboardSaved = false;
+const testSubstitutions = {
+  nativePicker: 'Only dialog.showOpenDialog selection results are queued; real IPC, source parsing, CAS and persistence stay in use. Interactive macOS picker operation is not tested.',
+  clipboard: 'Only this test-owned main-process clipboard.writeText/readText are replaced by an in-memory text buffer. The production copy IPC handler stays in use; the OS clipboard is never read or written.'
+};
 let commitReport;
 let importedItems;
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -38,7 +47,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const readIndex = () => JSON.parse(fs.readFileSync(indexPath, 'utf8'));
 const imageNames = ['701-alpha.png', '702-702-beta.png', '703-gamma.png', '704-delta.png', '704-704-delta.png'];
 
-for (const directory of [sourceDirectory, libraryRoot, profile, output]) fs.mkdirSync(directory, { recursive: true });
+for (const directory of [sourceImageDirectory, singleImageDirectory, libraryRoot, profile, output]) fs.mkdirSync(directory, { recursive: true });
 for (const [index, name] of imageNames.entries()) {
   const image = new PNG({ width: 16, height: 24 });
   for (let pixel = 0; pixel < image.data.length; pixel += 4) {
@@ -47,7 +56,9 @@ for (const [index, name] of imageNames.entries()) {
     image.data[pixel + 2] = 75 + index * 22;
     image.data[pixel + 3] = 255;
   }
-  fs.writeFileSync(path.join(sourceDirectory, name), PNG.sync.write(image));
+  const bytes = PNG.sync.write(image);
+  fs.writeFileSync(path.join(sourceImageDirectory, name), bytes);
+  fs.writeFileSync(path.join(singleImageDirectory, name), bytes);
 }
 
 function record(id, image, label) {
@@ -81,6 +92,7 @@ conflicting.prompt_cn += '\n这项来源内容改变，需要明确冲突处理�
 fs.writeFileSync(manifestPath, json(records));
 fs.writeFileSync(exceptionPath, json(exceptions));
 fs.writeFileSync(conflictPath, json([conflicting]));
+fs.writeFileSync(path.join(singleDirectory, path.basename(manifestPath)), json(records));
 
 function fingerprint(directory) {
   const files = {};
@@ -101,10 +113,14 @@ function fingerprint(directory) {
   return files;
 }
 const sourceBefore = fingerprint(sourceDirectory);
-const sourceHashes = Object.fromEntries(imageNames.map(name => [name, sourceBefore[name].sha256]));
+const singleBefore = fingerprint(singleDirectory);
+const sourceHashes = Object.fromEntries(imageNames.map(name => [name, sourceBefore[`images/${name}`].sha256]));
 const manifestSha256 = sourceBefore[path.basename(manifestPath)].sha256;
 
-function assertSourceUnchanged() { expect(fingerprint(sourceDirectory)).toEqual(sourceBefore); }
+function assertSourceUnchanged() {
+  expect(fingerprint(sourceDirectory)).toEqual(sourceBefore);
+  expect(fingerprint(singleDirectory)).toEqual(singleBefore);
+}
 function unwrap(result) { expect(result?.ok, JSON.stringify(result)).toBe(true); return result.data; }
 async function bridge(method, payload) { return page.evaluate(({ method, payload }) => window.portraitStudio[method](payload), { method, payload }); }
 async function state() {
@@ -121,23 +137,73 @@ async function selectDialog(file, action) {
   return result;
 }
 async function selections(manifest = manifestPath) {
-  const images = unwrap(await selectDialog(sourceDirectory, () => bridge('chooseBatchImages')));
-  const file = unwrap(await selectDialog(manifest, () => bridge('chooseBatchManifest')));
-  expect(typeof images.selectionId).toBe('string');
-  expect(typeof file.selectionId).toBe('string');
-  return { imageSelectionId: images.selectionId, manifestSelectionId: file.selectionId, type: 'photo' };
+  const before = await pickerCount();
+  const directory = unwrap(await selectDialog(sourceDirectory, () => bridge('chooseBatchDirectory')));
+  expect(await pickerCount()).toBe(before + 1);
+  expect(typeof directory.selectionId).toBe('string');
+  expect(directory.path).toBe(fs.realpathSync(sourceDirectory));
+  expect(directory.imageCount).toBe(imageNames.length);
+  expect(directory.manifests.map(item => item.relativePath).sort()).toEqual([manifestPath, exceptionPath, conflictPath].map(file => path.basename(file)).sort());
+  const selected = directory.manifests.find(item => item.relativePath === path.basename(manifest));
+  expect(selected, `manifest candidate ${path.basename(manifest)}`).toBeTruthy();
+  expect(typeof selected.candidateId).toBe('string');
+  const expectedCount = manifest === exceptionPath ? exceptions.length : manifest === conflictPath ? 1 : records.length;
+  expect(selected.recordCount).toBe(expectedCount);
+  directoryChecks.push({ phase: 'bridge-selection', pickerCalls: 1, sourceDirectory, imageCount: directory.imageCount, manifests: directory.manifests, selectedRelativePath: selected.relativePath });
+  return { directorySelectionId: directory.selectionId, manifestCandidateId: selected.candidateId, type: 'photo' };
 }
+async function pickerCount() { return app.evaluate(() => globalThis.__portraitBatchDialogOptions.length); }
 async function cancelSelection(value) { return unwrap(await bridge('cancelBatch', value)); }
 async function openBatch() {
+  await openLibraryMenu();
+  await expect(page.locator('#libraryBatch')).toBeEnabled();
   await page.locator('#libraryBatch').click();
   await expect(page.locator('#batchImportDialog')).toBeVisible();
 }
-async function chooseUI(manifest) {
-  await selectDialog(sourceDirectory, () => page.locator('#batchChooseImages').click());
-  await expect(page.locator('#batchImagesPath')).toContainText(path.basename(sourceDirectory));
-  await selectDialog(manifest, () => page.locator('#batchChooseManifest').click());
+async function chooseUI(manifest, { directory = sourceDirectory, automatic = false } = {}) {
+  const before = await pickerCount();
+  await selectDialog(directory, () => page.locator('#batchChooseDirectory').click());
+  await expect(page.locator('#batchDirectoryPath')).toContainText(path.basename(directory));
+  await expect(page.locator('#batchDiscoverySummary')).toBeVisible();
+  if (automatic) {
+    await expect(page.locator('#batchManifestCandidate')).toHaveCount(0);
+  } else {
+    const select = page.locator('#batchManifestCandidate');
+    await expect(select).toBeVisible();
+    await expect(select).toHaveValue('');
+    await expect(page.locator('#batchPreview')).toBeDisabled();
+    const candidate = await select.locator('option').evaluateAll((options, relativePath) => options.find(option => option.value && option.textContent.includes(relativePath))?.value, path.basename(manifest));
+    expect(typeof candidate).toBe('string');
+    await select.selectOption(candidate);
+  }
   await expect(page.locator('#batchManifestPath')).toContainText(path.basename(manifest));
-  await page.locator('#batchDefaultType').selectOption('photo');
+  expect(await pickerCount(), 'directory choice and candidate selection use exactly one native picker').toBe(before + 1);
+  const options = await app.evaluate(() => globalThis.__portraitBatchDialogOptions.at(-1));
+  expect(options.properties).toContain('openDirectory');
+  expect(options.properties).not.toContain('openFile');
+  directoryChecks.push({ phase: automatic ? 'single-candidate-auto-ui' : 'multi-candidate-explicit-ui', pickerCalls: 1, sourceDirectory: directory, selectedRelativePath: path.basename(manifest), nativePickerOptions: options });
+  await expect(page.locator('#batchChooseImages, #batchChooseManifest')).toHaveCount(0);
+  await expect(page.locator('#batchDefaultType')).toHaveCount(0);
+}
+async function openLibraryMenu() {
+  if (!await page.locator('#libraryMenuPanel').isVisible()) await page.locator('#libraryMenuToggle').click();
+  await expect(page.locator('#libraryMenuPanel')).toBeVisible();
+}
+async function closeLibraryMenu() {
+  if (await page.locator('#libraryMenuPanel').isVisible()) await page.locator('#libraryMenuToggle').click();
+  await expect(page.locator('#libraryMenuPanel')).toHaveCount(0);
+}
+async function setLanguage(language) {
+  if (!await page.locator('#settingsPanel').isVisible()) await page.locator('#settingsToggle').click();
+  await page.locator(`#uiLanguage button[data-language="${language}"]`).click();
+  await expect(page.locator(`#uiLanguage button[data-language="${language}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#settingsToggle').click();
+  await expect(page.locator('html')).toHaveAttribute('lang', language === 'zh' ? 'zh-CN' : 'en');
+}
+async function assertLanguage(language) {
+  await page.locator('#settingsToggle').click();
+  await expect(page.locator(`#uiLanguage button[data-language="${language}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#settingsToggle').click();
 }
 async function previewUI() {
   await page.locator('#batchPreview').click();
@@ -170,10 +236,6 @@ function storedItem(id) {
 }
 async function closeOwnedApp() {
   if (!app) return;
-  if (clipboardSaved) {
-    await app.evaluate(({ clipboard }) => clipboard.write(globalThis.__portraitBatchClipboard)).catch(() => {});
-    clipboardSaved = false;
-  }
   await app.close();
   app = undefined;
 }
@@ -186,7 +248,9 @@ async function launch(withEnvironment = true) {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await app.evaluate(({ clipboard, dialog }) => {
-    globalThis.__portraitBatchClipboard = { text: clipboard.readText(), html: clipboard.readHTML(), rtf: clipboard.readRTF(), image: clipboard.readImage() };
+    globalThis.__portraitBatchClipboardText = '';
+    clipboard.writeText = text => { globalThis.__portraitBatchClipboardText = String(text); };
+    clipboard.readText = () => globalThis.__portraitBatchClipboardText;
     globalThis.__portraitBatchDialogs = [];
     globalThis.__portraitBatchDialogOptions = [];
     dialog.showOpenDialog = async (...args) => {
@@ -195,7 +259,6 @@ async function launch(withEnvironment = true) {
       return globalThis.__portraitBatchDialogs.shift();
     };
   });
-  clipboardSaved = true;
   const settings = await app.evaluate(({ app, BrowserWindow }) => {
     const prefs = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return { pid: process.pid, packaged: app.isPackaged, userData: app.getPath('userData'), contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox, nodeIntegration: prefs.nodeIntegration, webSecurity: prefs.webSecurity };
@@ -206,16 +269,19 @@ async function launch(withEnvironment = true) {
   expect(settings.nodeIntegration).toBe(false);
   expect(settings.webSecurity).toBe(true);
   expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
-  for (const method of ['chooseBatchImages', 'chooseBatchManifest', 'previewBatch', 'commitBatch', 'cancelBatch']) {
+  expect(await page.evaluate(() => window.portraitStudio.mode)).not.toBe('browser-preview');
+  for (const method of ['chooseBatchDirectory', 'previewBatch', 'commitBatch', 'cancelBatch']) {
     expect(await page.evaluate(method => typeof window.portraitStudio[method], method)).toBe('function');
   }
-  for (const method of ['getUpdateState', 'checkForUpdates', 'chooseUpdateSource', 'downloadUpdate', 'installUpdate', 'onUpdateState', 'acknowledgeAppReady']) {
+  for (const method of ['chooseBatchImages', 'chooseBatchManifest', 'getUpdateState', 'checkForUpdates', 'chooseUpdateSource', 'downloadUpdate', 'installUpdate', 'onUpdateState', 'acknowledgeAppReady']) {
     expect(await page.evaluate(method => typeof window.portraitStudio[method], method)).toBe('undefined');
   }
   await expect(page.locator('#appUpdate')).toHaveCount(0);
   security.push(settings);
   await page.setViewportSize({ width: 1440, height: 920 });
-  await expect(page.locator('#libraryBatch')).toBeEnabled();
+  await openLibraryMenu();
+  for (const id of ['libraryCreate', 'libraryConfigure', 'libraryBatch']) await expect(page.locator(`#${id}`), `${id} is enabled in desktop build`).toBeEnabled();
+  await closeLibraryMenu();
   await state();
 }
 
@@ -232,12 +298,22 @@ async function launch(withEnvironment = true) {
     checks.push('isolated empty writable repository, private profile, sandbox and actual batch bridge initialized; update UI and all update preload methods are absent');
 
     await openBatch();
-    await selectDialog(null, () => page.locator('#batchChooseImages').click());
-    await selectDialog(null, () => page.locator('#batchChooseManifest').click());
+    await selectDialog(null, () => page.locator('#batchChooseDirectory').click());
     expect(fs.readFileSync(indexPath)).toEqual(initialIndex);
     expect(fingerprint(libraryRoot)).toEqual(initialTree);
     await page.locator('#batchCancel').click();
     await expect(page.locator('#batchImportDialog')).not.toBeVisible();
+    await openBatch();
+    await chooseUI(path.join(singleDirectory, path.basename(manifestPath)), { directory: singleDirectory, automatic: true });
+    await previewUI();
+    await expect(page.locator('#batchItems tbody tr[data-status="import"]')).toHaveCount(3);
+    await expect(page.locator('#batchConfirm')).toBeEnabled();
+    await screenshot('single-directory-auto-preview-1440x920');
+    await page.locator('#batchCancel').click();
+    await expect(page.locator('#batchImportDialog')).not.toBeVisible();
+    expect(fingerprint(libraryRoot)).toEqual(initialTree);
+    assertSourceUnchanged();
+    checks.push('one native directory selection discovers a root JSON and images in its child folder, automatically selects the sole manifest and previews all three records without a second picker or target write');
     await openBatch();
     await chooseUI(manifestPath);
     await previewUI();
@@ -249,7 +325,7 @@ async function launch(withEnvironment = true) {
     await expect(page.locator('#batchImportDialog')).not.toBeVisible();
     expect(fingerprint(libraryRoot)).toEqual(initialTree);
     assertSourceUnchanged();
-    checks.push('canceling either native source picker and canceling a fully populated preview leaves index, images and archives unchanged');
+    checks.push('canceling the single native directory picker and canceling a fully populated preview leave index, images and archives unchanged; multiple JSON candidates require an explicit in-dialog selection');
 
     const validTokens = await selections();
     const validPreview = unwrap(await bridge('previewBatch', validTokens));
@@ -268,15 +344,18 @@ async function launch(withEnvironment = true) {
     expect(wrongVersion.error.code).toBe('CONFLICT');
     expect(fingerprint(libraryRoot)).toEqual(initialTree);
     for (const payload of [
+      { directorySelectionId: sourceDirectory, manifestCandidateId: manifestPath, type: 'photo' },
+      { directorySelectionId: crypto.randomUUID(), manifestCandidateId: crypto.randomUUID(), type: 'photo' },
+      { directorySelectionId: validTokens.directorySelectionId, manifestCandidateId: crypto.randomUUID(), type: 'photo' },
+      { directorySelectionId: validTokens.directorySelectionId, type: 'photo' },
       { imageSelectionId: sourceDirectory, manifestSelectionId: manifestPath, type: 'photo' },
-      { imageSelectionId: crypto.randomUUID(), manifestSelectionId: crypto.randomUUID(), type: 'photo' },
       { ...validTokens, imageDirectory: '/etc', manifestPath: '/etc/passwd' },
     ]) expect((await bridge('previewBatch', payload)).ok).toBe(false);
     for (const payload of [
       { previewId: crypto.randomUUID(), confirmed: true, expectedVersion: validPreview.revision },
       { previewId: validPreview.previewId, confirmed: true, expectedVersion: validPreview.revision, targetRoot: '/tmp' },
     ]) expect((await bridge('commitBatch', payload)).ok).toBe(false);
-    await cancelSelection({ previewId: validPreview.previewId, imageSelectionId: validTokens.imageSelectionId, manifestSelectionId: validTokens.manifestSelectionId });
+    await cancelSelection({ previewId: validPreview.previewId, directorySelectionId: validTokens.directorySelectionId });
     expect((await bridge('previewBatch', validTokens)).ok).toBe(false);
     expect((await bridge('commitBatch', { previewId: validPreview.previewId, confirmed: true, expectedVersion: validPreview.revision })).ok).toBe(false);
     expect(fingerprint(libraryRoot)).toEqual(initialTree);
@@ -292,7 +371,7 @@ async function launch(withEnvironment = true) {
     expect(exceptional.items.find(item => item.id === 705).status).toBe('unmatched');
     expect(exceptional.items.find(item => item.id === 704).status).toBe('invalid');
     expect(exceptional.items.find(item => item.id === 704).sourceFileName).toBeUndefined();
-    await cancelSelection({ previewId: exceptional.previewId, imageSelectionId: exceptionTokens.imageSelectionId, manifestSelectionId: exceptionTokens.manifestSelectionId });
+    await cancelSelection({ previewId: exceptional.previewId, directorySelectionId: exceptionTokens.directorySelectionId });
     await openBatch();
     await chooseUI(exceptionPath);
     await previewUI();
@@ -311,7 +390,7 @@ async function launch(withEnvironment = true) {
 
     const beforeCommit = await state();
     await openBatch();
-    await chooseUI(manifestPath);
+    await chooseUI(path.join(singleDirectory, path.basename(manifestPath)), { directory: singleDirectory, automatic: true });
     await previewUI();
     await page.locator('#batchConfirm').click();
     await expect(page.locator('#batchReport')).toBeVisible();
@@ -323,13 +402,14 @@ async function launch(withEnvironment = true) {
       const stored = storedItem(original.id);
       const sourceName = original.id === 702 ? '702-702-beta.png' : original.image;
       expect(stored.sha256).toBe(sourceHashes[sourceName]);
-      expect(stored.bytes).toEqual(fs.readFileSync(path.join(sourceDirectory, sourceName)));
+      expect(stored.bytes).toEqual(fs.readFileSync(path.join(sourceImageDirectory, sourceName)));
       expect(stored.item.prompts).toEqual({ en: original.prompt_en, zh: original.prompt_cn });
       expect(stored.item.type).toBe('photo');
       expect(stored.item.sourceMetadata).toEqual(original);
       expect(stored.item.sourceImport.manifestSha256).toBe(manifestSha256);
       expect(stored.item.sourceImport.sourceHash).toBe(sourceHashes[sourceName]);
       expect(stored.item.sourceImport.sourceFileName).toBe(sourceName);
+      expect(stored.item.sourceImport.sourceRelativePath).toBe(`images/${sourceName}`);
       expect(stored.item.sourceImport.recordIndex).toBe(records.findIndex(record => record.id === original.id));
       expect(stored.item.sourceImport.typeOrigin).toBe('selected-default');
       expect(stored.item.sourceImport.matchMethod).toBe(original.id === 702 ? 'duplicate-leading-id-prefix' : 'exact');
@@ -339,6 +419,7 @@ async function launch(withEnvironment = true) {
       for (const name of ['mapping.json', 'report.json', 'source.json']) expect(fs.existsSync(path.join(archive, name))).toBe(true);
       const mapping = JSON.parse(fs.readFileSync(path.join(archive, 'mapping.json'), 'utf8'));
       expect(JSON.stringify(mapping)).toContain(sourceName);
+      expect(JSON.stringify(mapping)).toContain(`images/${sourceName}`);
       expect(JSON.stringify(mapping)).toContain(stored.item.image);
       expect(JSON.stringify(mapping)).toContain(sourceHashes[sourceName]);
       return { id: original.id, file: stored.file, sha256: stored.sha256, sourceMetadata: stored.item.sourceMetadata, sourceImport: stored.item.sourceImport };
@@ -351,7 +432,7 @@ async function launch(withEnvironment = true) {
     await expect(page.locator('#batchImportDialog')).not.toBeVisible();
     await expect(page.locator('.portrait-card')).toHaveCount(3);
     assertSourceUnchanged();
-    checks.push('one confirmed UI batch atomically adds three items with one revision increment, exact original PNGs, both full prompts, all 11 source fields, immutable raw JSON and complete archive mapping');
+    checks.push('one confirmed single-directory UI batch with an automatically selected root JSON atomically adds three child-folder images with one revision increment, exact original PNGs, both full prompts, all 11 source fields, immutable raw JSON and complete relative-path archive mapping');
 
     const idempotentBefore = fingerprint(libraryRoot);
     const repeatedTokens = await selections();
@@ -364,7 +445,7 @@ async function launch(withEnvironment = true) {
     expect(repeatedCommit.report.imported).toBe(0);
     expect(repeatedCommit.report.skipped).toBe(3);
     expect(repeatedCommit.snapshot.revision).toBe(afterCommit.revision);
-    await cancelSelection({ imageSelectionId: repeatedTokens.imageSelectionId, manifestSelectionId: repeatedTokens.manifestSelectionId });
+    await cancelSelection({ directorySelectionId: repeatedTokens.directorySelectionId });
     expect(fingerprint(libraryRoot)).toEqual(idempotentBefore);
     await openBatch();
     await chooseUI(manifestPath);
@@ -382,7 +463,7 @@ async function launch(withEnvironment = true) {
     expect(conflictingPreview.importable).toBe(0);
     expect(conflictingPreview.conflicts).toBe(1);
     expect(conflictingPreview.items[0].status).toBe('conflict');
-    await cancelSelection({ previewId: conflictingPreview.previewId, imageSelectionId: conflictTokens.imageSelectionId, manifestSelectionId: conflictTokens.manifestSelectionId });
+    await cancelSelection({ previewId: conflictingPreview.previewId, directorySelectionId: conflictTokens.directorySelectionId });
     await openBatch();
     await chooseUI(conflictPath);
     await previewUI();
@@ -393,12 +474,10 @@ async function launch(withEnvironment = true) {
     expect(fingerprint(libraryRoot)).toEqual(idempotentBefore);
     checks.push('changed metadata for an existing ID is reported as a conflict and does not silently replace or skip that record');
 
-    let galleryLanguage = page.locator('.toolbar').getByRole('group', { name: '提示词语言' });
-    const detailLanguage = page.locator('#detailDialog').getByRole('group', { name: '提示词语言' });
     for (const language of ['en', 'zh']) {
-      await galleryLanguage.getByRole('button', { name: language === 'zh' ? '中文' : 'English', exact: true }).click();
+      await setLanguage(language);
       for (const original of records) {
-        const card = page.locator('.portrait-card').filter({ has: page.locator('.card-number', { hasText: new RegExp(`^${original.id}$`) }) });
+        const card = page.locator(`.portrait-card[data-id="${original.id}"]`);
         const prompt = original[language === 'zh' ? 'prompt_cn' : 'prompt_en'];
         await card.hover();
         await copy(() => card.locator('.copy-button').click(), prompt, `${original.id} ${language} card button`);
@@ -414,7 +493,7 @@ async function launch(withEnvironment = true) {
         await page.keyboard.press('Escape');
       }
     }
-    checks.push('all three imported records use exact complete bilingual native clipboard text across four entry points; markup in labels/prompts remains inert text');
+    checks.push('all three imported records use exact complete bilingual text across four production copy IPC entry points captured in the test-owned main-process memory buffer; markup in labels/prompts remains inert text');
 
     await page.locator('#searchInput').fill('批导入完整条目 701');
     await expect(page.locator('.portrait-card')).toHaveCount(1);
@@ -438,15 +517,16 @@ async function launch(withEnvironment = true) {
     const beforeRestartTree = fingerprint(libraryRoot);
     await closeOwnedApp();
     await launch(false);
-    galleryLanguage = page.locator('.toolbar').getByRole('group', { name: '提示词语言' });
+    await openLibraryMenu();
     await expect(page.locator('#libraryRoot')).toContainText(fs.realpathSync(libraryRoot));
+    await closeLibraryMenu();
     await expect(page.locator('.portrait-card')).toHaveCount(3);
     expect(readIndex()).toEqual(beforeRestart);
     expect(fingerprint(libraryRoot)).toEqual(beforeRestartTree);
     const restarted = unwrap(await bridge('libraryGet', 701));
     expect(restarted.item.sourceMetadata).toEqual(beforeEdit.sourceMetadata);
     expect(restarted.item.sourceImport).toEqual(beforeEdit.sourceImport);
-    await expect(galleryLanguage.getByRole('button', { name: '中文', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await assertLanguage('zh');
     await page.locator('#searchInput').fill('已编辑但保留来源 701');
     await page.locator('.portrait-card').click();
     await expect.poll(() => page.locator('#detailPrompt').textContent()).toBe(records[1].prompt_cn);
@@ -457,11 +537,11 @@ async function launch(withEnvironment = true) {
     expect(errors).toEqual([]);
     checks.push('ordinary edit retains full source metadata and provenance; full process restart retains chosen root, collection, archive bytes, image hashes and Chinese preference');
 
-    const report = { status: 'passed', version, kind, executable: executable || require('electron'), scope: 'isolated temporary fixtures only; real PhotoRepo and user profile untouched', temporary, sourceDirectory, libraryRoot, profile, indexPath, sourceHashes, manifestSha256, security, previews, commitReport, importedItems, clipboardChecks, screenshots, checks, errors };
+    const report = { status: 'passed', version, kind, executable: executable || require('electron'), scope: 'isolated temporary fixtures only; real PhotoRepo and user profile untouched', testSubstitutions, temporary, sourceDirectory, sourceImageDirectory, singleDirectory, libraryRoot, profile, indexPath, sourceHashes, manifestSha256, security, directoryChecks, previews, commitReport, importedItems, clipboardChecks, screenshots, checks, errors };
     fs.writeFileSync(path.join(output, `${kind}-verification.json`), json(report));
     console.log(json({ status: report.status, kind, version, report: path.join(output, `${kind}-verification.json`), security, clipboardChecks: clipboardChecks.length, screenshots, checks, errors }));
   } catch (error) {
-    fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, temporary, libraryRoot, profile, security, previews, clipboardChecks, screenshots, checks, errors, error: error.stack }));
+    fs.writeFileSync(path.join(output, `${kind}-verification.json`), json({ status: 'failed', version, kind, testSubstitutions, temporary, libraryRoot, profile, security, directoryChecks, previews, clipboardChecks, screenshots, checks, errors, error: error.stack }));
     throw error;
   } finally {
     await closeOwnedApp();

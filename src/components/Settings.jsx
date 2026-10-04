@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { UILanguageControl, useI18n } from '../i18n.jsx';
+import { RemoteConnectionContext } from './RemoteConnectionDialog.jsx';
 
 export default function Settings() {
   const { t, theme, setTheme } = useI18n();
+  const remoteConnection = useContext(RemoteConnectionContext);
+  const remote = remoteConnection?.backend === 'remote';
   const [open, setOpen] = useState(false);
   const controlRef = useRef(null);
   const triggerRef = useRef(null);
@@ -36,6 +39,8 @@ export default function Settings() {
       <div className="settings-heading"><h2 id="settingsTitle">{t('settings.title')}</h2><button type="button" className="settings-close" aria-label={t('settings.close')} title={t('settings.close')} onClick={() => setOpen(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
       <UILanguageControl id="uiLanguage" />
       <div id="themeControl" className="theme-control" role="group" aria-label={t('settings.theme')}><span className="language-label">{t('settings.theme')}</span><button type="button" data-theme="dark" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>{t('settings.dark')}</button><button type="button" data-theme="light" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>{t('settings.light')}</button></div>
+      {!remote && <div id="settingsLibraryRoot" className="library-root" title={remoteConnection?.root || undefined}>{remoteConnection?.root || t('settings.libraryUnconfigured')}</div>}
+      <button id={remote ? 'settingsConnection' : 'settingsLibrary'} className="settings-connection-button" type="button" disabled={!remoteConnection?.allowed} title={!remoteConnection?.allowed ? t(remote ? 'connection.desktopOnly' : 'common.desktopOnly') : undefined} onClick={() => { setOpen(false); remoteConnection?.onOpen(); }}>{t(remote ? 'connection.title' : 'settings.library')}</button>
     </div>}
   </div>;
 }

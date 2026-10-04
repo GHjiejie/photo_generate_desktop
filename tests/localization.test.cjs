@@ -80,11 +80,11 @@ test('language IPC accepts only fixed scalar en/zh from the trusted main frame w
   assert.deepEqual(await f.invoke('library-ui-language', 'zh'), { ok: true, data: { locale: 'zh' } });
 });
 
-test('all four native chooser dialogs follow the live language including descriptions, buttons and filters', async t => {
+test('all three native chooser dialogs follow the live language including descriptions, buttons and filters', async t => {
   const f = await fixture(t);
   const choices = [
     ['library-choose', 'library', null], ['library-image-choose', 'image', 'imageFilter'],
-    ['library-batch-images-choose', 'batchImages', null], ['library-batch-manifest-choose', 'batchManifest', 'jsonFilter']
+    ['library-batch-directory-choose', 'batchDirectory', null]
   ];
   for (const locale of ['zh', 'en', 'zh']) {
     await f.invoke('library-ui-language', locale);
@@ -95,7 +95,7 @@ test('all four native chooser dialogs follow the live language including descrip
       assert.equal(options.message, table[`native.${name}Message`]);
       assert.equal(options.buttonLabel, table[`native.${name}Button`]);
       if (filter) assert.equal(options.filters[0].name, table[`native.${filter}`]);
-      assert.deepEqual(options.properties, channel === 'library-choose' ? ['openDirectory', 'createDirectory'] : channel === 'library-batch-images-choose' ? ['openDirectory'] : ['openFile']);
+      assert.deepEqual(options.properties, channel === 'library-choose' ? ['openDirectory', 'createDirectory'] : channel === 'library-batch-directory-choose' ? ['openDirectory'] : ['openFile']);
     }
   }
 });

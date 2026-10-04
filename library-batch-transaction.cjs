@@ -1,17 +1,23 @@
 // A separate journal keeps additive batch imports independent of CRUD/Trash recovery.
 module.exports = function batchTransactions(deps) {
   const { fs, constants, path, crypto, LibraryError, fail, sha, encode, clone, isObject, metadata,
-    validateIndex, imageMime, MAX_IMAGE, MAX_INDEX, INDEX, META, UUID, HASH, NOFOLLOW, mimeExtensions } = deps;
+    validateIndex, validateTranslationProvenance, imageMime, MAX_IMAGE, MAX_INDEX, INDEX, META, UUID, HASH, NOFOLLOW, mimeExtensions } = deps;
   const TRANSACTIONS = `${META}/batch-transactions`;
   const IMPORTS = `${META}/imports`;
   const MAX_RECORDS = 500;
   const MAX_TOTAL = 1024 * 1024 * 1024;
   const own = value => Object.prototype.hasOwnProperty.call(value, 'sourceMetadata');
+  const relativeSource = value => typeof value === 'string' && value.length <= 4096 && !path.isAbsolute(value) && !/[\u0000-\u001f\u007f\\]/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..' && part.length <= 255);
   const stable = value => JSON.stringify(value, function (key, item) {
     if (item && typeof item === 'object' && !Array.isArray(item)) return Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]]));
     return item;
   });
   const canceled = signal => { if (signal?.aborted) fail('ABORTED', '批量导入已取消，素材库没有提交变化。'); };
+  function collisionPolicy(options = {}, keys = ['collisionPolicy']) {
+    if (!isObject(options) || Object.getPrototypeOf(options) !== Object.prototype || Object.keys(options).some(key => !keys.includes(key))
+      || options.collisionPolicy !== undefined && !['conflict', 'allocate-new'].includes(options.collisionPolicy)) fail('INVALID_INPUT', '批量导入编号策略或参数无效。');
+    return options.collisionPolicy ?? 'conflict';
+  }
 
   async function noLinks(absolute, type) {
     if (typeof absolute !== 'string' || !path.isAbsolute(absolute) || absolute.includes('\0') || path.resolve(absolute) !== absolute) fail('UNSAFE_PATH', '批量导入来源路径无效。');
@@ -64,15 +70,20 @@ module.exports = function batchTransactions(deps) {
     const manifest = await sourceRead(plan.manifestPath, MAX_INDEX);
     if (sha(manifest) !== plan.manifestSha256 || !manifest.equals(plan.manifestBytes)) fail('SOURCE_CHANGED', '原始 JSON 清单已变化，请重新预览。');
     let raw;
-    try { raw = JSON.parse(manifest.toString('utf8')); } catch { fail('INVALID_DATA', '原始清单不是有效 JSON。'); }
+    try { raw = require('./batch-import.cjs').extractManifestRecords(JSON.parse(manifest.toString('utf8'))); } catch { fail('INVALID_DATA', '原始清单不是有效 JSON。'); }
     if (!Array.isArray(raw) || raw.length > MAX_RECORDS) fail('INVALID_DATA', '原始清单必须是最多 500 条记录的 JSON 数组。');
     let total = 0;
     const ids = new Set(), indices = new Set();
     for (const record of plan.records) {
       metadata(record);
       if (!isObject(record.originalMetadata) || !Number.isSafeInteger(record.recordIndex) || record.recordIndex < 0 || record.recordIndex >= raw.length || stable(record.originalMetadata) !== stable(raw[record.recordIndex]) || ids.has(record.id) || indices.has(record.recordIndex)) fail('INVALID_DATA', '批量记录与原始清单不一致或含重复编号。');
+      if (record.translationProvenance || record.promptOrigins?.zh === 'derived-translation') {
+        if (record.promptOrigins?.zh !== 'derived-translation') fail('INVALID_DATA', '中文译文来源类型无效。');
+        validateTranslationProvenance(record.translationProvenance, { sourceMetadata: record.originalMetadata, sourceId: record.id, recordIndex: record.recordIndex, manifestSha256: plan.manifestSha256, derivedChinesePrompt: record.prompts.zh });
+      }
       ids.add(record.id); indices.add(record.recordIndex);
-      if (typeof record.sourceFileName !== 'string' || record.sourceFileName.length > 255 || record.sourceFileName.includes('\0') || path.basename(record.sourceFileName) !== record.sourceFileName || !/\.(png|jpe?g|webp)$/i.test(record.sourceFileName) || record.sourceImagePath !== path.join(plan.sourceDirectory, record.sourceFileName) || !HASH.test(record.sha256 || '') || !Number.isSafeInteger(record.size) || record.size < 1 || record.size > MAX_IMAGE || !Number.isSafeInteger(record.dev) || !Number.isSafeInteger(record.ino) || !Object.hasOwn(mimeExtensions, record.mime) || !['source', 'selected-default'].includes(record.typeOrigin)) fail('UNSAFE_PATH', '批量图片路径、分类来源或校验信息无效。');
+      const sourceRelativePath = record.sourceRelativePath ?? record.sourceFileName;
+      if (!relativeSource(sourceRelativePath) || typeof record.sourceFileName !== 'string' || record.sourceFileName.length > 255 || record.sourceFileName.includes('\0') || path.basename(record.sourceFileName) !== record.sourceFileName || path.basename(sourceRelativePath) !== record.sourceFileName || !/\.(png|jpe?g|webp)$/i.test(record.sourceFileName) || record.sourceImagePath !== path.join(plan.sourceDirectory, sourceRelativePath) || !HASH.test(record.sha256 || '') || !Number.isSafeInteger(record.size) || record.size < 1 || record.size > MAX_IMAGE || !Number.isSafeInteger(record.dev) || !Number.isSafeInteger(record.ino) || !Object.hasOwn(mimeExtensions, record.mime) || !['source', 'selected-default'].includes(record.typeOrigin)) fail('UNSAFE_PATH', '批量图片路径、分类来源或校验信息无效。');
       total += record.size;
       if (total > MAX_TOTAL) fail('INVALID_DATA', '一次批量导入图片不能超过 1 GiB。');
     }
@@ -88,34 +99,57 @@ module.exports = function batchTransactions(deps) {
     return bytes;
   }
 
-  function classify(index, plan) {
+  function classify(index, plan, policy = 'conflict') {
     const records = [];
     const byId = new Map(index.items.map(item => [item.id, item]));
-    for (const record of plan.records) {
-      const existing = byId.get(record.id);
-      const same = existing && existing.sha256 === record.sha256 && existing.label === record.label && existing.type === record.type && stable(existing.prompts) === stable(record.prompts) && own(existing) && stable(existing.sourceMetadata) === stable(record.originalMetadata);
-      const status = !existing ? 'import' : same ? 'skip' : 'conflict';
-      records.push({ recordIndex: record.recordIndex, id: record.id, label: record.label, sourceFileName: record.sourceFileName,
+    const byHash = new Map();
+    for (const item of [...index.items].sort((a, b) => a.id - b.id)) if (!byHash.has(item.sha256)) byHash.set(item.sha256, item);
+    const reserved = new Set([...byId.keys(), ...plan.records.map(record => record.id)]);
+    let nextId = Math.max(0, ...byId.keys()) + 1;
+    for (const record of [...plan.records].sort((a, b) => a.id - b.id)) {
+      let existing = byId.get(record.id), targetId = record.id, status;
+      if (policy === 'allocate-new') {
+        const duplicate = byHash.get(record.sha256);
+        if (duplicate) { existing = duplicate; targetId = duplicate.id; status = 'skip'; }
+        else {
+          if (existing) {
+            while (reserved.has(nextId) && nextId <= 999999) nextId++;
+            if (nextId > 999999) fail('INVALID_DATA', '素材编号已用尽，批次没有提交。');
+            targetId = nextId++; reserved.add(targetId);
+          }
+          status = 'import';
+          byHash.set(record.sha256, { id: targetId });
+          existing = null;
+        }
+      } else {
+        const same = existing && existing.sha256 === record.sha256 && existing.label === record.label && existing.type === record.type && stable(existing.prompts) === stable(record.prompts) && own(existing) && stable(existing.sourceMetadata) === stable(record.originalMetadata);
+        status = !existing ? 'import' : same ? 'skip' : 'conflict';
+      }
+      records.push({ recordIndex: record.recordIndex, id: record.id, sourceId: record.id, targetId, label: record.label, sourceFileName: record.sourceFileName, sourceHash: record.sha256,
+        ...(record.sourceRelativePath ? { sourceRelativePath: record.sourceRelativePath } : {}),
         status, ...(status === 'conflict' ? { code: 'DUPLICATE_ID', message: '编号已存在且内容不同，保留现有素材。' } : {}),
+        ...(policy === 'allocate-new' && status === 'skip' ? { matchMethod: 'image-sha256', skipReason: 'IMAGE_HASH_EXISTS' } : {}),
+        ...(record.translationProvenance ? { translationProvenance: clone(record.translationProvenance) } : {}),
         ...(existing ? { targetFileName: existing.image, archiveRel: existing.sourceImport?.archiveRel } : {}) });
     }
     const safeIndices = new Set(plan.records.map(record => record.recordIndex));
     for (const row of plan.recordResults || []) {
       if (safeIndices.has(row.index)) continue;
-      records.push({ recordIndex: row.index, id: row.id, label: row.label, sourceFileName: row.sourceFileName, status: 'invalid', code: row.issueCodes?.[0] || 'INVALID_DATA', message: '原清单记录或图片配对不完整，本条不导入。' });
+      records.push({ recordIndex: row.index, id: row.id, sourceId: row.id, targetId: null, label: row.label, sourceFileName: row.sourceFileName, ...(row.sourceRelativePath ? { sourceRelativePath: row.sourceRelativePath } : {}), status: 'invalid', code: row.issueCodes?.[0] || 'INVALID_DATA', message: '原清单记录或图片配对不完整，本条不导入。' });
     }
     records.sort((a, b) => a.recordIndex - b.recordIndex);
     const summary = { total: plan.counts?.total ?? records.length, importable: 0, skipped: 0, conflicts: 0, invalid: 0 };
     for (const row of records) summary[{ import: 'importable', skip: 'skipped', conflict: 'conflicts', invalid: 'invalid' }[row.status]]++;
-    return { revision: index.revision, summary, records, canImport: summary.importable > 0 };
+    return { revision: index.revision, collisionPolicy: policy, summary, records, canImport: summary.importable > 0 };
   }
 
-  async function preview(lib, plan) {
+  async function preview(lib, plan, options) {
+    const policy = collisionPolicy(options);
     await validatePlan(plan);
     const loaded = await lib._load();
     for (const record of plan.records) await image(lib, record);
     await revalidate(plan);
-    return classify(loaded.index, plan);
+    return classify(loaded.index, plan, policy);
   }
 
   function report(journal, status) {
@@ -123,7 +157,7 @@ module.exports = function batchTransactions(deps) {
       beforeVersion: journal.before.revision, afterVersion: status === 'completed' ? journal.after.revision : journal.before.revision,
       imported: status === 'completed' ? journal.entries.length : 0, planned: journal.entries.length,
       skipped: journal.summary.skipped, conflicts: journal.summary.conflicts, invalid: journal.summary.invalid,
-      records: journal.mapping };
+      ...(journal.collisionPolicy ? { collisionPolicy: journal.collisionPolicy } : {}), records: journal.mapping };
   }
 
   async function writeJournal(lib, journal) {
@@ -227,12 +261,17 @@ module.exports = function batchTransactions(deps) {
   function validateJournal(lib, value, txId) {
     if (!isObject(value) || value.schemaVersion !== 1 || value.operation !== 'batch-import' || !UUID.test(txId) || value.txId !== txId || value.root !== lib.root || !['prepared', 'image-installed', 'index-written'].includes(value.phase) || typeof value.archiveReady !== 'boolean' || value.archiveRel !== `${IMPORTS}/${txId}` || !HASH.test(value.manifestSha256 || '') || !Array.isArray(value.entries) || !value.entries.length || value.entries.length > MAX_RECORDS || !Array.isArray(value.archiveFiles) || !Array.isArray(value.mapping) || !isObject(value.summary)) fail('RECOVERY_CONFLICT', '批次事务格式无效，记录已保留。');
     validateIndex(value.before); validateIndex(value.after);
+    if (value.collisionPolicy !== undefined && !['conflict', 'allocate-new'].includes(value.collisionPolicy)) fail('RECOVERY_CONFLICT', '批次编号策略无效，恢复记录已保留。');
     if (typeof value.beforeRaw !== 'string' || typeof value.afterRaw !== 'string' || stable(JSON.parse(value.beforeRaw)) !== stable(value.before) || stable(JSON.parse(value.afterRaw)) !== stable(value.after) || value.after.revision !== value.before.revision + 1) fail('RECOVERY_CONFLICT', '批次索引副本不一致，记录已保留。');
     const additions = new Set();
     for (const entry of value.entries) {
       const item = entry.item;
       const filename = `${String(item?.id).padStart(6, '0')}-${txId}.${mimeExtensions[item?.mime]}`;
       if (!item || additions.has(item.id) || value.before.items.some(old => old.id === item.id) || item.revision !== 1 || item.image !== filename || item.imageRel !== `assets/images/${filename}` || item.sourceImport?.archiveRel !== value.archiveRel || entry.stageRel !== `${value.archiveRel}/.staging/image-${item.id}.${mimeExtensions[item.mime]}` || typeof entry.ready !== 'boolean' || entry.ready && (!entry.identity || !value.archiveReady) || entry.identity !== null && (!isObject(entry.identity) || !Number.isSafeInteger(entry.identity.dev) || !Number.isSafeInteger(entry.identity.ino)) || stable(value.after.items.find(row => row.id === item.id)) !== stable(item)) fail('RECOVERY_CONFLICT', '批次新增图片或来源记录无效。');
+      if (item.sourceImport.sourceId !== undefined) {
+        const mapping = value.mapping.filter(row => row.status === 'import' && row.targetId === item.id);
+        if (mapping.length !== 1 || mapping[0].sourceId !== item.sourceImport.sourceId || mapping[0].recordIndex !== item.sourceImport.recordIndex || mapping[0].sourceHash !== item.sha256) fail('RECOVERY_CONFLICT', '批次来源编号与目标编号映射不一致。');
+      }
       additions.add(item.id);
     }
     const sortItems = items => [...items].sort((a, b) => a.id - b.id);
@@ -283,39 +322,45 @@ module.exports = function batchTransactions(deps) {
   }
 
   async function importBatch(lib, plan, options) {
-    if (!isObject(options) || Object.keys(options).some(key => !['expectedVersion', 'confirmed', 'signal'].includes(key)) || options.confirmed !== true) fail('CONFIRMATION_REQUIRED', '请确认预览后再导入批次。');
+    if (!isObject(options) || options.confirmed !== true) fail('CONFIRMATION_REQUIRED', '请确认预览后再导入批次。');
+    const policy = collisionPolicy(options, ['expectedVersion', 'confirmed', 'signal', 'collisionPolicy']);
     const { signal } = options;
     const validation = await validatePlan(plan, signal);
     const loaded = await lib._load();
     lib._compare(loaded.index, options);
-    const previewed = classify(loaded.index, plan);
+    const previewed = classify(loaded.index, plan, policy);
     // Idempotent retries and all-conflict batches do not write another archive.
     if (!previewed.canImport) {
       for (const record of plan.records) await image(lib, record, signal);
       await revalidate(plan); canceled(signal);
       return { ...lib._public(loaded.index), batch: { imported: 0, skipped: previewed.summary.skipped, conflicts: previewed.summary.conflicts, invalid: previewed.summary.invalid,
-        archiveRel: previewed.records.find(row => row.archiveRel)?.archiveRel, mapping: previewed.records, report: { status: 'unchanged', records: previewed.records } } };
+        collisionPolicy: policy, archiveRel: previewed.records.find(row => row.archiveRel)?.archiveRel, mapping: previewed.records, report: { status: 'unchanged', records: previewed.records } } };
     }
     const txId = crypto.randomUUID(), txRel = `${TRANSACTIONS}/${txId}`, archiveRel = `${IMPORTS}/${txId}`;
     const createdAt = new Date().toISOString();
-    const selectedIds = new Set(previewed.records.filter(row => row.status === 'import').map(row => row.id));
-    const selected = plan.records.filter(record => selectedIds.has(record.id));
-    const entries = selected.map(record => {
-      const filename = `${String(record.id).padStart(6, '0')}-${txId}.${mimeExtensions[record.mime]}`;
-      return { item: { ...metadata(record), image: filename, imageRel: `assets/images/${filename}`, revision: 1, sha256: record.sha256, size: record.size, mime: record.mime,
-        sourceMetadata: clone(record.originalMetadata), sourceImport: { archiveRel, manifestSha256: plan.manifestSha256, sourceHash: record.sha256, recordIndex: record.recordIndex, sourceFileName: record.sourceFileName, typeOrigin: record.typeOrigin, matchMethod: record.matchMethod } },
-        stageRel: `${archiveRel}/.staging/image-${record.id}.${mimeExtensions[record.mime]}`, identity: null, ready: false };
+    const selectedRows = previewed.records.filter(row => row.status === 'import');
+    const selected = selectedRows.map(row => plan.records.find(record => record.recordIndex === row.recordIndex));
+    const entries = selected.map((record, index) => {
+      const targetId = selectedRows[index].targetId;
+      const filename = `${String(targetId).padStart(6, '0')}-${txId}.${mimeExtensions[record.mime]}`;
+      return { item: { ...metadata(record), id: targetId, image: filename, imageRel: `assets/images/${filename}`, revision: 1, sha256: record.sha256, size: record.size, mime: record.mime,
+        sourceMetadata: clone(record.originalMetadata), sourceImport: { archiveRel, manifestSha256: plan.manifestSha256, sourceHash: record.sha256, sourceId: record.id, recordIndex: record.recordIndex, sourceFileName: record.sourceFileName, ...(record.sourceRelativePath ? { sourceRelativePath: record.sourceRelativePath } : {}), typeOrigin: record.typeOrigin, matchMethod: record.matchMethod,
+          ...(record.translationProvenance ? { translationProvenance: clone(record.translationProvenance), derivedChinesePrompt: record.prompts.zh } : {}) } },
+        stageRel: `${archiveRel}/.staging/image-${targetId}.${mimeExtensions[record.mime]}`, identity: null, ready: false };
     });
     const after = validateIndex({ ...clone(loaded.index), revision: loaded.index.revision + 1, updatedAt: createdAt, items: [...loaded.index.items, ...entries.map(entry => entry.item)].sort((a, b) => a.id - b.id) });
     const afterRaw = encode(after);
     if (Buffer.byteLength(afterRaw) > MAX_INDEX) fail('INVALID_DATA', '导入后素材索引超过 32 MiB，批次没有提交。');
-    const mapping = previewed.records.map(row => row.status === 'import' ? { ...row, targetFileName: entries.find(entry => entry.item.id === row.id).item.image, targetImageRel: entries.find(entry => entry.item.id === row.id).item.imageRel, sourceHash: selected.find(record => record.id === row.id).sha256 } : row);
+    const mapping = previewed.records.map(row => {
+      const entry = entries.find(value => value.item.id === row.targetId);
+      return entry ? { ...row, targetFileName: entry.item.image, targetImageRel: entry.item.imageRel, sourceHash: entry.item.sha256 } : row;
+    });
     const archiveBytes = [
       { name: 'manifest.json', bytes: Buffer.from(plan.manifestBytes) },
       { name: 'mapping.json', bytes: Buffer.from(encode(mapping)) },
-      { name: 'source.json', bytes: Buffer.from(encode({ schemaVersion: 1, batchId: txId, manifestPath: plan.manifestPath, sourceDirectory: plan.sourceDirectory, manifestSha256: plan.manifestSha256, pins: plan.pins, issues: plan.issues || [], unpaired: plan.unpaired || [] })) }
+      { name: 'source.json', bytes: Buffer.from(encode({ schemaVersion: 1, batchId: txId, collisionPolicy: policy, manifestPath: plan.manifestPath, sourceDirectory: plan.sourceDirectory, manifestSha256: plan.manifestSha256, pins: plan.pins, issues: plan.issues || [], unpaired: plan.unpaired || [] })) }
     ];
-    const journal = { schemaVersion: 1, operation: 'batch-import', txId, root: lib.root, createdAt, phase: 'prepared', archiveReady: false, archiveRel, manifestSha256: plan.manifestSha256,
+    const journal = { schemaVersion: 1, operation: 'batch-import', collisionPolicy: policy, txId, root: lib.root, createdAt, phase: 'prepared', archiveReady: false, archiveRel, manifestSha256: plan.manifestSha256,
       before: loaded.index, beforeRaw: loaded.raw, after, afterRaw, entries, mapping, summary: previewed.summary, archiveFiles: archiveBytes.map(file => ({ name: file.name, sha256: sha(file.bytes) })) };
     // The journal is durable before a staged or live image is created.
     await lib._mkdir(TRANSACTIONS); await lib._mkdir(IMPORTS); await lib._mkdir(txRel);
@@ -387,7 +432,7 @@ module.exports = function batchTransactions(deps) {
       await archiveState(lib, journal, 'completed');
       await clean(lib, journal);
       lib.indexHash = sha(Buffer.from(afterRaw));
-      return { ...lib._public(after), batch: { batchId: txId, archiveRel, imported: entries.length, skipped: previewed.summary.skipped, conflicts: previewed.summary.conflicts, invalid: previewed.summary.invalid, mapping, report: report(journal, 'completed') } };
+      return { ...lib._public(after), batch: { batchId: txId, archiveRel, collisionPolicy: policy, imported: entries.length, skipped: previewed.summary.skipped, conflicts: previewed.summary.conflicts, invalid: previewed.summary.invalid, mapping, report: report(journal, 'completed') } };
     } catch (error) {
       if (error.crash) throw error;
       try {

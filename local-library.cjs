@@ -41,6 +41,23 @@ function metadata(value) {
   }
   return { id: value.id, label: value.label, type: value.type, prompts: { en: value.prompts.en, zh: value.prompts.zh } };
 }
+function validateTranslationProvenance(provenance, { sourceMetadata, sourceId, recordIndex, manifestSha256, derivedChinesePrompt }) {
+  const keys = ['kind', 'origin', 'sourceLanguage', 'targetLanguage', 'sourcePromptField', 'sourcePromptSha256', 'translatedPromptSha256', 'sourceId', 'recordIndex', 'manifestSha256'];
+  const originalId = typeof sourceMetadata?.id === 'string' && /^\d{1,6}$/.test(sourceMetadata.id) ? Number(sourceMetadata.id) : sourceMetadata?.id;
+  const originalPrompt = field => field === 'prompts.en' ? sourceMetadata?.prompts?.en : sourceMetadata?.[field];
+  const sourcePromptField = ['prompt_en', 'prompt', 'prompts.en'].find(field => originalPrompt(field) !== undefined);
+  const english = originalPrompt(sourcePromptField);
+  if (!isObject(provenance) || Object.keys(provenance).length !== keys.length || keys.some(key => !Object.hasOwn(provenance, key))
+    || provenance.kind !== 'derived-translation' || provenance.origin !== 'assistant-translation' || provenance.sourceLanguage !== 'en' || provenance.targetLanguage !== 'zh'
+    || !idValid(sourceId) || originalId !== sourceId || provenance.sourceId !== sourceId || provenance.recordIndex !== recordIndex || provenance.manifestSha256 !== manifestSha256
+    || !HASH.test(provenance.sourcePromptSha256 || '') || !HASH.test(provenance.translatedPromptSha256 || '') || !HASH.test(manifestSha256 || '')
+    || provenance.sourcePromptField !== sourcePromptField || typeof english !== 'string' || !english.trim() || english.length > 65536 || english.includes('\0')
+    || typeof derivedChinesePrompt !== 'string' || !derivedChinesePrompt.trim() || derivedChinesePrompt.length > 65536 || derivedChinesePrompt.includes('\0')
+    || ['prompt_cn', 'prompt_zh'].some(field => Object.hasOwn(sourceMetadata, field)) || isObject(sourceMetadata.prompts) && Object.hasOwn(sourceMetadata.prompts, 'zh')
+    || sha(Buffer.from(english, 'utf8')) !== provenance.sourcePromptSha256 || sha(Buffer.from(derivedChinesePrompt, 'utf8')) !== provenance.translatedPromptSha256) {
+    fail('INVALID_DATA', '中文衍生译文与原始提示词的来源记录或校验信息无效。');
+  }
+}
 function validateIndex(value) {
   if (!isObject(value) || value.schemaVersion !== 1 || !revisionValid(value.revision) || !Array.isArray(value.items) || value.items.length > 10000) {
     fail('INVALID_DATA', '素材索引格式无效，请保留文件并检查索引。');
@@ -60,6 +77,12 @@ function validateIndex(value) {
     if (Object.hasOwn(item, 'sourceMetadata') || Object.hasOwn(item, 'sourceImport')) {
       const source = item.sourceImport;
       if (!isObject(item.sourceMetadata) || !isObject(source) || !new RegExp(`^${META.replace('.', '\\.')}\\/imports\\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).test(source.archiveRel || '') || !HASH.test(source.manifestSha256 || '') || !HASH.test(source.sourceHash || '') || !Number.isSafeInteger(source.recordIndex) || source.recordIndex < 0 || source.recordIndex >= 500 || typeof source.sourceFileName !== 'string' || path.basename(source.sourceFileName) !== source.sourceFileName || !['source', 'selected-default'].includes(source.typeOrigin)) fail('INVALID_DATA', '批次素材来源信息无效，请保留索引检查。');
+      if (Object.hasOwn(source, 'sourceRelativePath') && (typeof source.sourceRelativePath !== 'string' || source.sourceRelativePath.length > 4096 || path.isAbsolute(source.sourceRelativePath) || /[\u0000-\u001f\u007f\\]/.test(source.sourceRelativePath) || source.sourceRelativePath.split('/').some(part => !part || part === '.' || part === '..' || part.length > 255) || path.basename(source.sourceRelativePath) !== source.sourceFileName)) fail('INVALID_DATA', '批次图片相对路径无效，请保留索引检查。');
+      if (Object.hasOwn(source, 'sourceId')) {
+        const originalId = typeof item.sourceMetadata.id === 'string' && /^\d{1,6}$/.test(item.sourceMetadata.id) ? Number(item.sourceMetadata.id) : item.sourceMetadata.id;
+        if (!idValid(source.sourceId) || originalId !== source.sourceId) fail('INVALID_DATA', '批次来源编号与原始记录不一致。');
+      }
+      if (Object.hasOwn(source, 'translationProvenance') || Object.hasOwn(source, 'derivedChinesePrompt')) validateTranslationProvenance(source.translationProvenance, { ...source, sourceMetadata: item.sourceMetadata });
     }
   }
   return value;
@@ -80,7 +103,7 @@ function translateError(error) {
   return new LibraryError('IO_ERROR', '本地文件操作失败，已尝试恢复原素材；请重试或检查目录。', error);
 }
 
-const batches = require('./library-batch-transaction.cjs')({ fs, constants, path, crypto, LibraryError, fail, sha, encode, clone, isObject, metadata, validateIndex, imageMime, MAX_IMAGE, MAX_INDEX, INDEX, META, UUID, HASH, NOFOLLOW, mimeExtensions });
+const batches = require('./library-batch-transaction.cjs')({ fs, constants, path, crypto, LibraryError, fail, sha, encode, clone, isObject, metadata, validateIndex, validateTranslationProvenance, imageMime, MAX_IMAGE, MAX_INDEX, INDEX, META, UUID, HASH, NOFOLLOW, mimeExtensions });
 
 class LocalLibrary {
   constructor({ trashItem, validateImage, fault } = {}) {
@@ -393,7 +416,7 @@ class LocalLibrary {
   create(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('create', payload, imagePath))); }
   update(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('update', payload, imagePath))); }
   remove(payload) { return this._enqueue(() => this._locked(() => this._mutate('remove', payload))); }
-  previewBatch(plan) { return this._enqueue(() => this._locked(() => batches.preview(this, plan))); }
+  previewBatch(plan, options) { return this._enqueue(() => this._locked(() => batches.preview(this, plan, options))); }
   importBatch(plan, options) { return this._enqueue(() => this._locked(() => batches.import(this, plan, options))); }
 
   async _fault(phase, journal) { if (this.fault) await this.fault(phase, { txId: journal.txId, operation: journal.operation, root: this.root }); }

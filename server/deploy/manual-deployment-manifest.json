@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "target": "ubuntu@18.180.65.241",
+  "files": {
+    "server/deploy/deploy_server.py": {
+      "size": 44600,
+      "sha256": "25f9e8b1d476439bdf7123384ae5da195ba51fd9c69a5ba8505ff939196e7ac9"
+    },
+    "server/deploy/portrait-studio.service": {
+      "size": 691,
+      "sha256": "d8247be2fe608875cdbd3b2eb3851f12188cf412ba825ad7d93f6505c783ff08"
+    },
+    "server/dist/portrait-server-linux-amd64": {
+      "size": 10092049,
+      "sha256": "008a6c980a9f1f3531213f7de46b4577079c7f3c1bfe231d8526d16dd1ae4ff1"
+    }
+  },
+  "library": {
+    "count": 100,
+    "revision": 3,
+    "archiveSize": 227072304,
+    "archiveSha256": "390cc75dde3c6f44aad0e12ff6a840423ff1199fb9be6867c7b3678e5d2d0799",
+    "manifestSha256": "752120a072a348add59ff06024649dcc841375a4e7b018b8c3e6a4fcf3630f76"
+  }
+}

@@ -1,0 +1,30 @@
+[Unit]
+Description=Portrait Studio Go API with fixed admin authentication
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/portrait-studio
+# The administrator initializes this hash-only file locally; no default secret.
+Environment=PORTRAIT_STUDIO_ADMIN_USERNAME=admin
+Environment=PORTRAIT_STUDIO_AUTH_FILE=/home/ubuntu/portrait-studio/config/admin-auth.json
+ExecStart=/home/ubuntu/portrait-studio/bin/portrait-server -listen 127.0.0.1:4137 -data /home/ubuntu/portrait-studio/data/photo_repo -version platform-auth
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/portrait-studio/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

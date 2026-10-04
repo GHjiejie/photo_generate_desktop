@@ -36,6 +36,10 @@ test('readonly preview returns complete metadata and verified image without chan
     const beforeNames = await fs.readdir(path.join(f.root, '.portrait-studio'));
     const list = await request(f.service, '/__preview/api/library');
     assert.equal(list.status, 200); assert.equal(list.json().data.writable, false);
+    assert.equal(list.json().data.backend, 'local'); assert.equal(list.json().data.remote, false);
+    assert.equal(list.json().data.items[0].mime, f.index.items[0].mime);
+    assert.equal(list.json().data.items[0].size, f.index.items[0].size);
+    assert.equal(list.json().data.items[0].sha256, f.index.items[0].sha256);
     assert.deepEqual(list.json().data.items[0].prompts, f.index.items[0].prompts);
     assert.equal(list.json().data.items[0].image_url, '/__preview/api/images/1?revision=2');
     const detail = await request(f.service, '/__preview/api/portraits/1');

@@ -1,0 +1,27 @@
+[Unit]
+Description=Portrait Studio Go API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/portrait-studio
+ExecStart=/home/ubuntu/portrait-studio/bin/portrait-server -listen 127.0.0.1:4137 -data /home/ubuntu/portrait-studio/data/photo_repo -version remote-20261004
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/portrait-studio/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -95,7 +95,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 .app-shell { height: 100vh; min-height: 100vh; display: flex; }
 .sidebar { width: 250px; flex: 0 0 250px; display: flex; flex-direction: column; padding: 0 18px 22px; background: #15161a; border-right: 1px solid var(--line); }
-.window-controls-space { height: 48px; flex: 0 0 48px; }
+.window-controls-space { height: 28px; flex: 0 0 28px; }
 .brand-lockup { display: flex; align-items: center; gap: 11px; padding: 0 8px 27px; }
 .brand-mark { width: 29px; height: 29px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; transform: rotate(-8deg); }
 .brand-mark span { display: block; border-radius: 5px 5px 3px 3px; background: var(--accent); }
@@ -401,12 +401,29 @@ html[data-theme="light"] .copy-button:hover { color: #fff; }
 .library-menu-action.primary-button:hover:not(:disabled) { background: var(--primary-hover); color: var(--primary-text); }
 .library-menu-panel .library-controls { margin-top: 0; }
 .library-menu-panel .library-root { margin: 0 0 12px; }
+.settings-connection-button { width: 100%; margin-top: 12px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-soft); color: var(--text); cursor: pointer; font-size: 11px; text-align: left; }
+.settings-connection-button:hover:not(:disabled) { border-color: var(--hover-border); background: var(--accent-wash); color: var(--accent); }
+.remote-connection-dialog { width: min(620px, calc(100vw - 60px)); }
+.remote-endpoint-field { display: flex; flex-direction: column; gap: 9px; color: var(--text); font-size: 12px; }
+.remote-endpoint-field input { width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field-bg); color: var(--text); font-size: 12px; }
+.remote-endpoint-field small, .remote-login-hint { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.remote-connection-status { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); color: var(--muted); font-size: 12px; line-height: 1.7; }
+.remote-connection-status strong { color: var(--text); font-weight: 600; }
+.remote-connection-status.status-connected { border-color: var(--success-border); background: var(--report-bg); color: var(--success-text); }
+.remote-login-hint { margin: 15px 0 0; }
+.remote-platform-session { display: grid; gap: 9px; margin-top: 15px; padding: 12px 0; border-block: 1px solid var(--line); font-size: 11px; line-height: 1.6; }
+.remote-platform-session > div { display: flex; justify-content: space-between; gap: 15px; }
+.remote-platform-session span { color: var(--muted); }
+.remote-platform-session strong { font-weight: 500; }
+.remote-platform-session time { text-align: right; overflow-wrap: anywhere; }
+.remote-connection-dialog .form-error { margin-top: 13px; }
+.remote-connection-dialog .management-actions { margin-top: 20px; }
 @media (max-width: 760px) {
   .topbar > .search-actions { width: auto; max-width: calc(100% - 56px); }
 }
 
 .sidebar-content { display: contents; }
-.brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 27px; }
+.brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 42px; }
 .brand-row .brand-lockup { flex: 1; min-width: 0; padding: 0; }
 .brand-row .brand-mark { flex-shrink: 0; }
 .brand-row .brand-lockup > div:last-child { min-width: 0; }
@@ -424,15 +441,16 @@ html[data-theme="light"] .copy-button:hover { color: #fff; }
 .sidebar.collapsed .settings-trigger { display: flex; margin-inline: 0; }
 .sidebar.collapsed .settings-panel { width: 220px; max-width: calc(100vw - 36px); z-index: 12; }
 
+/* The brand shares the toolbar's 38px row; the collection keeps its existing position. */
 /* The main flex area follows the same animated sidebar width on every frame. */
 .sidebar { position: relative; transition: width 200ms cubic-bezier(.22, .61, .36, 1), flex-basis 200ms cubic-bezier(.22, .61, .36, 1); }
 .brand-row { position: static; margin-top: 0; transition: margin-top 200ms cubic-bezier(.22, .61, .36, 1), margin-bottom 200ms cubic-bezier(.22, .61, .36, 1); }
-.brand-row .brand-lockup { min-height: 29px; overflow: hidden; transition: padding-left 200ms cubic-bezier(.22, .61, .36, 1), gap 200ms cubic-bezier(.22, .61, .36, 1); }
+.brand-row .brand-lockup { min-height: 38px; overflow: hidden; transition: min-height 200ms cubic-bezier(.22, .61, .36, 1), padding-left 200ms cubic-bezier(.22, .61, .36, 1), gap 200ms cubic-bezier(.22, .61, .36, 1); }
 .brand-text { flex: 0 0 132px; max-width: 132px; overflow: hidden; white-space: nowrap; opacity: 1; visibility: visible; transition: max-width 200ms cubic-bezier(.22, .61, .36, 1), opacity 40ms ease 160ms, visibility 0s linear 160ms; }
 .sidebar-toggle { position: absolute; top: 28px; right: 18px; width: 38px; height: 38px; transition: right 200ms cubic-bezier(.22, .61, .36, 1), background 160ms ease, color 160ms ease; }
 .sidebar.collapsed .sidebar-toggle { right: calc((100% - 38px) / 2); }
-.sidebar.collapsed .brand-row { margin-top: 34px; }
-.sidebar.collapsed .brand-lockup { justify-content: flex-start; gap: 0; padding-left: 7.5px; }
+.sidebar.collapsed .brand-row { margin-top: 54px; }
+.sidebar.collapsed .brand-lockup { min-height: 29px; justify-content: flex-start; gap: 0; padding-left: 7.5px; }
 .sidebar.collapsed .brand-text { max-width: 0; opacity: 0; visibility: hidden; transition: max-width 200ms cubic-bezier(.22, .61, .36, 1), opacity 80ms ease, visibility 0s linear 80ms; }
 .sidebar .collection-card { max-height: 160px; overflow: hidden; white-space: nowrap; opacity: 1; visibility: visible; transition: max-height 200ms cubic-bezier(.22, .61, .36, 1), padding 200ms cubic-bezier(.22, .61, .36, 1), border-width 200ms cubic-bezier(.22, .61, .36, 1), opacity 40ms ease 160ms, visibility 0s linear 160ms; }
 .sidebar.collapsed .collection-card { max-height: 0; padding-block: 0; border-width: 0; opacity: 0; visibility: hidden; transition: max-height 200ms cubic-bezier(.22, .61, .36, 1), padding 200ms cubic-bezier(.22, .61, .36, 1), border-width 200ms cubic-bezier(.22, .61, .36, 1), opacity 80ms ease, visibility 0s linear 80ms; }

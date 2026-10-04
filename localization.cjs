@@ -19,20 +19,23 @@ function errorResult(error, locale = 'zh') {
   return { ok: false, error: { code, message: errorText(code, locale) } };
 }
 function issueCode(code) { return typeof code === 'string' && has(messages.zh, `issues.${code}`) ? code : 'IO_ERROR'; }
+const relativePathFields = value => typeof value === 'string' && value.length <= 4096 && !value.startsWith('/') && !/[\u0000-\u001f\u007f\\:]/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..' && part.length <= 255) ? { sourceRelativePath: value } : {};
 function publicIssue(issue) {
   return { code: issueCode(issue?.code),
     ...(Number.isSafeInteger(issue?.recordIndex) ? { recordIndex: issue.recordIndex } : {}),
     ...(Number.isSafeInteger(issue?.id) ? { id: issue.id } : {}),
     ...(typeof issue?.sourceFileName === 'string' ? { sourceFileName: issue.sourceFileName } : {}),
+    ...relativePathFields(issue?.sourceRelativePath),
     severity: issue?.severity === 'info' ? 'info' : 'error' };
 }
 function publicUnpaired(item) {
-  return { sourceFileName: item.sourceFileName, reasonCode: issueCode(item.reasonCode || item.reason) };
+  return { sourceFileName: item.sourceFileName, ...relativePathFields(item.sourceRelativePath), reasonCode: issueCode(item.reasonCode || item.reason) };
 }
 function publicBatchRow(row, target, source) {
   const issueCodes = [...new Set([...(row.issueCodes || []), ...(target?.code ? [target.code] : [])].map(issueCode))];
   return { recordIndex: row.index, id: row.id, label: row.label,
     sourceFileName: row.sourceFileName || source?.sourceFileName,
+    ...relativePathFields(row.sourceRelativePath || source?.sourceRelativePath || target?.sourceRelativePath),
     targetFileName: target?.targetFileName,
     status: row.status === 'unmatched' ? 'unmatched' : target?.status || 'invalid',
     code: target?.code ? issueCode(target.code) : issueCodes[0] || null,

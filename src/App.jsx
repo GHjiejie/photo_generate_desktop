@@ -9,6 +9,7 @@ import PortraitEditor from './components/PortraitEditor.jsx';
 import DeleteConfirm from './components/DeleteConfirm.jsx';
 import BatchImportDialog from './components/BatchImportDialog.jsx';
 import Toast from './components/Toast.jsx';
+import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
 function unwrap(result) {
@@ -23,7 +24,11 @@ export default function App() {
   const connected = typeof bridge?.libraryList === 'function';
   const browserPreview = bridge?.mode === 'browser-preview';
   const desktop = connected && !browserPreview;
+  const remoteBackend = bridge?.backend === 'remote';
+  const connectionSupported = desktop && remoteBackend && ['connectionSettings', 'saveConnection', 'signIn', 'logout'].every(name => typeof bridge?.[name] === 'function');
   const [library, setLibrary] = useState(initialLibrary);
+  const [connection, setConnection] = useState({ endpoint: '', recommendedEndpoint, configured: false, environmentOverride: false, authorizationProvided: false, authentication: null, status: 'unconfigured' });
+  const [connectionOpen, setConnectionOpen] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [pending, setPending] = useState(connected ? 'loading' : '');
   const [query, setQuery] = useState('');
@@ -46,30 +51,67 @@ export default function App() {
     return items.filter(item => !term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn].filter(value => value != null).join(' ').toLowerCase().includes(term));
   }, [items, query]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || batchOpen);
-  const canManage = desktop && library.configured && library.writable && !libraryError;
+  const managing = Boolean(editor || deleteTarget || batchOpen || connectionOpen);
+  const canManage = desktop && library.configured && library.writable && !libraryError && (!remoteBackend || connection.status === 'connected' && platformSessionActive(connection.authentication));
   const showToast = useCallback(message => {
+    if (remoteBackend && isConnectionError(message)) {
+      setConnection(previous => ({ ...previous, ...(isAuthenticationError(message) ? { authentication: null } : {}), status: connectionStatusForError(message) }));
+      setLibrary(initialLibrary); setLibraryError(message);
+      selectionRequest.current += 1; setSelectedId(null); setDetailItem(null);
+      if (isAuthenticationError(message)) { setEditor(null); setDeleteTarget(null); setBatchOpen(false); }
+    }
     setToast(message);
     clearTimeout(timers.current.toast);
     timers.current.toast = setTimeout(() => setToast(''), 2600);
-  }, []);
+  }, [remoteBackend]);
   const applySnapshot = useCallback(snapshot => {
+    if (remoteBackend && snapshot.authentication && !platformSessionActive(snapshot.authentication)) {
+      setLibrary(initialLibrary); setLibraryError({ code: 'SESSION_EXPIRED' });
+      setConnection(previous => ({ ...previous, authentication: null, status: 'session-expired' }));
+      setDetailItem(null); setSelectedId(null); return;
+    }
     setLibrary(snapshot);
     setLibraryError('');
+    setConnection(previous => ({ ...previous, ...(Object.hasOwn(snapshot, 'authentication') ? { authentication: snapshot.authentication } : {}), ...(snapshot.authentication ? { serverLoggedOut: undefined, logoutErrorCode: null } : {}), status: snapshot.configured ? 'connected' : previous.configured ? 'not-connected' : 'unconfigured' }));
     if (snapshot.configured) setDetailItem(previous => previous ? snapshot.items.find(item => item.id === previous.id) ?? null : null);
-  }, []);
+  }, [remoteBackend]);
   useEffect(() => {
     if (!connected) return;
     let live = true;
-    bridge.libraryList().then(result => {
-      const snapshot = unwrap(result);
-      if (live) applySnapshot(snapshot);
-    }).catch(error => { if (live) setLibraryError(error); }).finally(() => {
+    const metadata = connectionSupported ? bridge.connectionSettings().then(unwrap) : Promise.resolve(null);
+    Promise.allSettled([metadata, bridge.libraryList().then(unwrap)]).then(results => {
+      if (!live) return;
+      if (results[0].status === 'fulfilled' && results[0].value) {
+        const settings = results[0].value;
+        setConnection(previous => ({ ...previous, ...settings, status: settings.configured ? 'not-connected' : 'unconfigured' }));
+      }
+      if (results[1].status === 'fulfilled') applySnapshot(results[1].value);
+      else {
+        setLibrary(initialLibrary); setLibraryError(results[1].reason);
+        setConnection(previous => ({ ...previous, ...(isAuthenticationError(results[1].reason) ? { authentication: null } : {}), status: connectionStatusForError(results[1].reason) }));
+      }
+    }).finally(() => {
       if (live) { busyRef.current = false; setPending(''); }
     });
     return () => { live = false; };
-  }, [connected, bridge, applySnapshot]);
+  }, [connected, bridge, connectionSupported, applySnapshot]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+  useEffect(() => {
+    if (!remoteBackend || !connection.authentication) return;
+    const expiresAt = Date.parse(connection.authentication.expiresAt);
+    if (!Number.isFinite(expiresAt)) return;
+    let timer;
+    function checkExpiry() {
+      const remaining = expiresAt - Date.now();
+      if (remaining > 0) { timer = setTimeout(checkExpiry, Math.min(remaining, 2147483647)); return; }
+      setConnection(previous => ({ ...previous, authentication: null, status: 'session-expired' }));
+      setLibrary(initialLibrary); setLibraryError({ code: 'SESSION_EXPIRED' });
+      selectionRequest.current += 1; setSelectedId(null); setDetailItem(null);
+      setEditor(null); setDeleteTarget(null); setBatchOpen(false);
+    }
+    checkExpiry();
+    return () => clearTimeout(timer);
+  }, [connection.authentication, remoteBackend]);
   async function exclusive(kind, action) {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -82,9 +124,22 @@ export default function App() {
     applySnapshot(snapshot);
     return snapshot;
   }
+  async function updateAuthenticationAfterBooleanFailure() {
+    if (!connectionSupported) return false;
+    try {
+      const settings = unwrap(await bridge.connectionSettings());
+      const error = { code: settings.lastErrorCode };
+      if (!settings.authentication && isAuthenticationError(error)) {
+        setConnection(previous => ({ ...previous, ...settings, authentication: null, status: connectionStatusForError(error) }));
+        showToast(error); return true;
+      }
+    } catch (error) { if (isAuthenticationError(error)) { showToast(error); return true; } }
+    return false;
+  }
   function closeDetail() { selectionRequest.current += 1; setSelectedId(null); setDetailItem(null); }
   async function configureLibrary() {
     if (!desktop || managing) return;
+    if (connectionSupported) { setConnectionOpen(true); return; }
     await exclusive('configure', async () => {
       try {
         const data = unwrap(await bridge.chooseLibrary());
@@ -94,6 +149,56 @@ export default function App() {
         setQuery('');
         showToast({ key: data.writable ? 'app.connected' : 'app.connectedReadonly' });
       } catch (error) { setLibraryError(error); showToast(error); }
+    });
+  }
+  function openConnectionSettings() {
+    if (!connectionSupported || managing || busyRef.current) return;
+    setConnectionOpen(true);
+  }
+  async function connectServer(endpoint) {
+    if (!connectionSupported || busyRef.current) return;
+    await exclusive('connect', async () => {
+      closeDetail(); setLibrary(initialLibrary); setLibraryError('');
+      setConnection(previous => ({ ...previous, status: 'connecting' }));
+      try {
+        if (endpoint !== connection.endpoint || !connection.configured) {
+          const settings = unwrap(await bridge.saveConnection({ endpoint }));
+          setConnection(previous => ({ ...previous, ...settings, status: 'connecting' }));
+        }
+        const snapshot = unwrap(await bridge.chooseLibrary());
+        if (snapshot.cancelled) throw { code: 'REMOTE_AUTH_REQUIRED' };
+        applySnapshot(snapshot); setQuery('');
+        showToast({ key: snapshot.writable ? 'app.connected' : 'app.connectedReadonly' });
+      } catch (error) {
+        setLibraryError(error); setConnection(previous => ({ ...previous, status: connectionStatusForError(error) }));
+        showToast(error);
+      }
+    });
+  }
+  async function signInServer() {
+    if (!connectionSupported || busyRef.current) return;
+    await exclusive('login', async () => {
+      try {
+        const result = unwrap(await bridge.signIn());
+        if (result.cancelled) return;
+        closeDetail(); applySnapshot(result); setQuery('');
+        showToast({ key: result.writable ? 'app.connected' : 'app.connectedReadonly' });
+      } catch (error) {
+        setLibraryError(error); setConnection(previous => ({ ...previous, status: connectionStatusForError(error) }));
+        showToast(error);
+      }
+    });
+  }
+  async function signOutServer() {
+    if (!connectionSupported || typeof bridge.logout !== 'function' || busyRef.current) return;
+    await exclusive('logout', async () => {
+      try {
+        const settings = unwrap(await bridge.logout());
+        closeDetail(); setLibrary(initialLibrary); setLibraryError({ code: 'AUTH_REQUIRED' });
+        setEditor(null); setDeleteTarget(null); setBatchOpen(false); setQuery('');
+        setConnection(previous => ({ ...previous, ...settings, authentication: null, status: 'auth-required' }));
+        showToast({ key: settings.serverLoggedOut === false ? 'connection.signedOutUnconfirmed' : 'connection.signedOut' });
+      } catch (error) { showToast(error); }
     });
   }
   async function refreshLibrary() {
@@ -109,7 +214,7 @@ export default function App() {
     try {
       const item = library.configured ? unwrap(await bridge.libraryGet(id)).item : items.find(value => value.id === id);
       if (request === selectionRequest.current && item) { setSelectedId(id); setDetailItem(item); }
-    } catch (error) { showToast(error); }
+    } catch (error) { if (request === selectionRequest.current) showToast(error); }
   }
   useEffect(() => { setCopiedId(null); }, [language]);
   useEffect(() => {
@@ -120,25 +225,29 @@ export default function App() {
   async function copyPrompt(item, fromCard = false) {
     if (!item) return;
     try {
-      const prompt = promptFor(item, language);
-      const copied = await bridge?.copyText(prompt);
-      if (!copied) await navigator.clipboard.writeText(prompt);
+      if (desktop) {
+        if (typeof bridge.copyPrompt !== 'function' || !await bridge.copyPrompt({ id: item.id, revision: item.revision, language })) throw new Error('COPY_FAILED');
+      } else {
+        const prompt = promptFor(item, language);
+        const copied = await bridge?.copyText(prompt);
+        if (!copied) await navigator.clipboard.writeText(prompt);
+      }
       if (fromCard) {
         setCopiedId(item.id);
         clearTimeout(timers.current.copy);
         timers.current.copy = setTimeout(() => setCopiedId(null), 1500);
       }
       showToast({ key: 'app.promptCopied', params: { number: portraitNumber(item), languageKey: language === 'zh' ? 'app.chinese' : 'app.english' } });
-    } catch { showToast({ key: 'app.copyFailed' }); }
+    } catch { if (!await updateAuthenticationAfterBooleanFailure()) showToast({ key: 'app.copyFailed' }); }
   }
   async function openImage(item) {
     if (!item) return;
     try {
       if (bridge) {
         const target = library.configured ? { id: item.id, revision: item.revision } : item.image;
-        if (!await bridge.openImage(target)) showToast({ key: 'app.imageFailed' });
+        if (!await bridge.openImage(target) && !await updateAuthenticationAfterBooleanFailure()) showToast({ key: 'app.imageFailed' });
       } else { window.open(item.image_url, '_blank', 'noopener,noreferrer'); }
-    } catch { showToast({ key: 'app.imageFailed' }); }
+    } catch { if (!await updateAuthenticationAfterBooleanFailure()) showToast({ key: 'app.imageFailed' }); }
   }
   function cycle(direction) {
     if (!selected || !visible.length || managing) return;
@@ -165,7 +274,7 @@ export default function App() {
   async function releaseSelection(token) {
     if (!token) return;
     try { unwrap(await bridge.releaseImage(token)); }
-    catch (error) { showToast({ key: 'app.releaseFailed', params: { error } }); }
+    catch (error) { showToast(isAuthenticationError(error) ? error : { key: 'app.releaseFailed', params: { error } }); }
   }
   async function cancelEditor() {
     if (busyRef.current || !editor) return;
@@ -183,7 +292,10 @@ export default function App() {
           setEditor(previous => previous?.session === session ? { ...previous, image: data, error: '' } : previous);
           if (editor.image?.token !== data.token) await releaseSelection(editor.image?.token);
         }
-      } catch (error) { setEditor(previous => previous?.session === session ? { ...previous, error: error } : previous); }
+      } catch (error) {
+        if (isAuthenticationError(error)) { showToast(error); return; }
+        setEditor(previous => previous?.session === session ? { ...previous, error: error } : previous);
+      }
     });
   }
   async function saveEditor(draft) {
@@ -201,10 +313,11 @@ export default function App() {
         if (editor.mode === 'create') { setQuery(''); }
         showToast({ key: editor.mode === 'edit' ? 'app.edited' : 'app.created' });
       } catch (error) {
+        if (isAuthenticationError(error)) { showToast(error); return; }
         let conflict = null;
         if (error.code === 'CONFLICT') {
           try { const snapshot = await readSnapshot(); conflict = { ...snapshot, item: snapshot.items.find(item => item.id === editor.item?.id) }; }
-          catch (refreshError) { setLibraryError(refreshError); }
+          catch (refreshError) { setLibraryError(refreshError); if (isAuthenticationError(refreshError)) { showToast(refreshError); return; } }
         }
         setEditor(previous => previous?.session === session ? { ...previous, error: error.code === 'CONFLICT' ? { key: 'app.editConflict' } : error, conflict, reviewOpen: false } : previous);
       }
@@ -233,28 +346,32 @@ export default function App() {
         setDeleteTarget(null);
         showToast({ key: 'app.deleted' });
       } catch (error) {
-        if (error.code === 'CONFLICT') { try { await readSnapshot(); } catch (refreshError) { setLibraryError(refreshError); } }
+        if (isAuthenticationError(error)) { showToast(error); return; }
+        if (error.code === 'CONFLICT') { try { await readSnapshot(); } catch (refreshError) { setLibraryError(refreshError); if (isAuthenticationError(refreshError)) { showToast(refreshError); return; } } }
         setDeleteTarget(previous => previous ? { ...previous, error: error.code === 'CONFLICT' ? { key: 'app.deleteConflict' } : error, conflicted: error.code === 'CONFLICT' } : previous);
       }
     });
   }
   let notice = '';
-  if (libraryError) notice = t('app.libraryError', { error: errorText(libraryError) });
+  const describeError = error => remoteBackend && isConnectionError(error) ? t(`connection.status.${connectionStatusForError(error)}`) : errorText(error);
+  if (libraryError) notice = t('app.libraryError', { error: describeError(libraryError) });
   else if (pending === 'loading') notice = t('app.loading');
   else if (!browserPreview) {
     if (!desktop) notice = t('app.desktopRequired');
     else if (!library.configured) notice = t('app.noLibrary');
     else if (!library.writable) notice = t('app.readonly');
   }
-  const toastText = toast?.key ? t(toast.key, { ...toast.params, ...(toast.params?.error ? { error: errorText(toast.params.error) } : {}), ...(toast.params?.languageKey ? { language: t(toast.params.languageKey) } : {}) }) : errorText(toast);
-  return <>
+  const toastText = toast?.key ? t(toast.key, { ...toast.params, ...(toast.params?.error ? { error: describeError(toast.params.error) } : {}), ...(toast.params?.languageKey ? { language: t(toast.params.languageKey) } : {}) }) : describeError(toast);
+  const visibleLibrary = { ...library, writable: desktop ? canManage : library.writable, connected: remoteBackend ? connection.status === 'connected' : library.configured, connectionStatus: remoteBackend ? pending === 'loading' ? 'connecting' : connection.status : undefined };
+  return <RemoteConnectionContext.Provider value={{ backend: remoteBackend ? 'remote' : 'local', root: library.root, configured: library.configured, allowed: (remoteBackend ? connectionSupported : desktop && typeof bridge?.chooseLibrary === 'function') && !pending && !managing, onOpen: remoteBackend ? openConnectionSettings : configureLibrary, onAuthenticationError: error => { if (remoteBackend && isAuthenticationError(error)) showToast(error); } }}>
     <div className="app-shell"><Sidebar portraits={items} />
-      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={library} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} /></main>
+      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} /></main>
     </div>
     <Toast message={toastText} />
     <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
     <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />
-  </>;
+    {remoteBackend && <RemoteConnectionDialog open={connectionOpen} connection={connection} allowed={connectionSupported} pending={connectionOpen ? pending : ''} onClose={() => { if (!busyRef.current) setConnectionOpen(false); }} onConnect={connectServer} onSignIn={signInServer} onSignOut={signOutServer} />}
+  </RemoteConnectionContext.Provider>;
 }

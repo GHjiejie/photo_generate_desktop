@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+<title>Portrait Studio</title><link rel="stylesheet" href="auth.css"></head>
+<body><main><h1 id="authTitle">平台登录</h1><p id="authDescription">使用平台管理员初始化的密码。会话只保留在当前应用内存中。</p><div id="authEndpoint"></div>
+<form id="authForm" autocomplete="off"><label for="authUsername" id="authUsernameLabel">内置账号</label><input id="authUsername" type="text" value="admin" readonly autocomplete="off" autocapitalize="off" spellcheck="false" required>
+<label for="authPassword" id="authPasswordLabel">密码</label><input id="authPassword" type="password" maxlength="1024" autocomplete="off" required autofocus>
+<div id="authStatus" role="status" aria-live="polite"></div><div class="actions"><button id="authCancel" type="button">取消</button><button id="authSubmit" type="submit">登录</button></div></form></main><script src="auth-renderer.js"></script></body></html>
