@@ -1,8 +1,8 @@
 # Portrait Studio
 
-React 19 + Vite + Electron 本地桌面应用，当前源码版本 1.6.0。前端与素材后端默认全部在这台 Mac 运行，无需服务器地址或登录。可管理不同题材的图片，没有人物或性别限制。保留深色布局、素材、搜索、疏密切换、详情和完整 English／中文复制；按本轮界面要求移除图库卡片的编号与名称，以及摄影／绘画分类入口。原始编号、名称、分类与来源资料仍保存在数据中。本地后端管理外部 `photo_repo` 的图片、完整双语提示词及来源资料，桌面通过固定 IPC 操作。软件安装包不包含图库图片，也没有应用更新模块。
+React 19 + Vite + Electron 本地桌面应用，当前源码版本 1.6.1。前端与素材后端默认全部在这台 Mac 运行，无需服务器地址或登录。可管理不同题材的图片，没有人物或性别限制。保留深色布局、素材、搜索、疏密切换、详情和完整 English／中文复制；按本轮界面要求移除图库卡片的编号与名称，以及摄影／绘画分类入口。原始编号、名称、分类与来源资料仍保存在数据中。本地后端管理外部 `photo_repo` 的图片、完整双语提示词及来源资料，桌面通过固定 IPC 操作。软件安装包不包含图库图片，也没有应用更新模块。
 
-已封存的 1.6.0 安装包沿用用户确认的界面与真实桌面功能。当前源码新增单目录批量导入并恢复默认本地后端；本轮没有重新生成安装包，已有 1.6.0 包不包含这些新增源码功能。远程 Go 及认证源码保留为显式可选模式，服务器部署已取消。封存的 1.0–1.5 软件与报告代表各自历史版本。
+1.6.1 将当前已验证的本地功能重新打包，包括单目录批量导入和保存路径的重启恢复。打包应用始终使用本地后端，远程认证运行模块与真实图库不进入安装包；远程 Go 及认证源码仅保留为显式开发模式，服务器部署已取消。已封存的 1.0–1.6.0 软件与报告代表各自历史版本，字节保持不变。
 
 ## 运行与检查
 
@@ -19,7 +19,7 @@ npm run test:remote
 
 `npm start` 先构建 React，再启动 Electron，默认读取 `/Users/jie/Github/photo_generate_desktop/photo_repo`。左下角设置显示本地保存路径，可通过原生选择器切换素材库；无需配置远程地址或平台账号。启动时先确定后端，preload 只接收本地主进程提供的固定模式标记；旧的远程地址、认证环境变量和连接配置不会自动启用远程模式。
 
-只有显式设置 `PORTRAIT_STUDIO_BACKEND=remote` 才启用保留的远程模式及以下认证功能。该模式中，`PORTRAIT_STUDIO_REMOTE_BASE_URL` 可覆盖地址；已有认证可通过 `PORTRAIT_STUDIO_REMOTE_AUTHORIZATION` 提供，仅保留在主进程内存，不交给 renderer。界面保存仅允许 HTTPS，无 URL 用户名、密码、查询或片段；开发版环境变量允许明确的 loopback HTTP 测试地址。保存地址不代表远端已可用；连接失败时禁用远程写入，显示具体连接状态。
+只有在未打包的源码开发启动中显式设置 `PORTRAIT_STUDIO_BACKEND=remote` 才启用保留的远程模式及以下认证功能；1.6.1 安装包始终本地运行。该模式中，`PORTRAIT_STUDIO_REMOTE_BASE_URL` 可覆盖地址；已有认证可通过 `PORTRAIT_STUDIO_REMOTE_AUTHORIZATION` 提供，仅保留在主进程内存，不交给 renderer。界面保存仅允许 HTTPS，无 URL 用户名、密码、查询或片段；开发版环境变量允许明确的 loopback HTTP 测试地址。保存地址不代表远端已可用；连接失败时禁用远程写入，显示具体连接状态。
 
 平台内置唯一账号 `admin`，没有用户增删改查、注册或通用默认密码。服务器管理员通过本地隐藏输入初始化密码，保存 Argon2id 哈希，并通过环境参数或秘密配置启动服务；步骤与占位配置见 [服务认证说明](server/README.md) 和 [server/.env.example](server/.env.example)。不要把真实密码、哈希或 token 放入源码、聊天、URL、日志或交付附件。
 
@@ -43,10 +43,11 @@ PORTRAIT_STUDIO_SINGLE_LANGUAGE_MODE=sidebar-motion node scripts/verify-single-l
 Apple Silicon Mac 打包：
 
 ```sh
-npm run dist:mac
+npm run package
+node scripts/create-mac-artifacts.cjs --dmg-only
 ```
 
-输出统一在 `release/`：`Portrait-Studio-React-1.6.0-arm64.dmg`、`Portrait-Studio-React-1.6.0-arm64.zip`；源码与验证报告位于 `release/archives/1.6.0/`。DMG 提供应用与 Applications 拖拽入口，用户自行安装；本项目不自动安装。构建依赖来自标准 npm 源，没有新增付费服务。
+当前 DMG 输出为 `release/Portrait-Studio-React-1.6.1-arm64.dmg`，应用构建位于 `release/archives/1.6.1/runtime/mac-arm64/Portrait Studio.app`。构建和产物脚本拒绝覆盖同版本已有输出；需要再次发布时使用新版本。`npm run dist:mac` 可同时生成 DMG 与 app ZIP，本轮仅交付 DMG。DMG 提供应用与 Applications 拖拽入口，用户自行安装；本项目不自动安装。构建依赖来自标准 npm 源，没有新增付费服务。
 
 历史版本 DMG 与 app ZIP 位于 `release/` 根目录，源码、截图证据、报告、元信息与运行时分别位于 `release/archives/<版本>/source/`、`evidence/`、`reports/`、`meta/`、`runtime/`。迁移只调整路径，保留原文件字节；路径映射与新校验索引见 `release/RELOCATION.json`、`release/ARCHIVE-SHA256SUMS`。原 `release/Portrait Studio.app` 和 1.0 DMG 保留原位。历史报告中的旧绝对路径及旧校验记录保留为当时事实；1.2 报告已有的历史校验差异单独记入迁移索引。
 
@@ -106,7 +107,7 @@ photo_repo/.portrait-studio/transactions/          CRUD 恢复记录
 
 本地后端管理持久素材与业务事务；主进程管理选择器、受验证原图及剪贴板。preload 仅暴露固定 IPC 方法和主进程确定的后端模式；renderer 没有任意文件读写能力。保持 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`、`webSecurity: true`，核验主 frame 来源，拒绝外部导航、弹窗和权限请求。素材协议校验目录、ID、库代次、条目版本、文件身份与哈希，拒绝任意路径或网络取图。
 
-构建清单包含本地 CRUD、批次事务模块和指向外部目录的默认配置，排除 `assets/images/`、`photo_repo/` 和 `node_modules/`，React 也不导入图库。未来重新打包时，最终 ASAR 和 Resources 需检查没有图库 PNG/JPEG/WebP 或图片内嵌数据。品牌图标不属于图库。源码 ZIP 也不携带图库图片，工作区旧图片保留；旧素材兼容测试若没有原图或已封存参考会明确跳过，其他后端测试使用隔离临时素材。本轮只修正构建清单，没有覆盖任何封存包。
+1.6.1 构建清单包含本地 CRUD、批次事务模块和指向外部目录的默认配置，排除 `assets/images/`、`photo_repo/`、`node_modules/` 以及远程认证运行模块，React 也不导入图库。最终 ASAR 和 Resources 检查没有图库 PNG/JPEG/WebP 或图片内嵌数据。品牌图标不属于图库。工作区旧图片和封存包保留；后端测试使用隔离临时素材。`scripts/verify-local-packaged.cjs` 针对最终包验证两张真实 PNG 的单目录导入、完整双语复制和保存路径后的重启恢复，选择器返回值及剪贴板用测试替身，不代表手工原生选择器或系统剪贴板验收。
 
 构建使用本地 ad-hoc 签名（`codesign -s -`），不是 Developer ID 正式签名，也未公证；不能声称通过公开分发 Gatekeeper。验证不会绕过 Gatekeeper 或改变 macOS 安全设置。封存的 1.4 包已移到统一交付目录，文件字节保持不变，其更新功能不代表当前源码。
 
@@ -130,4 +131,4 @@ photo_repo/.portrait-studio/transactions/          CRUD 恢复记录
 - `scripts/verify-single-language.cjs`：全局唯一语言、完整提示词、固定外框及设置／主题／固定搜索栏的窄浏览器验收。
 - `scripts/verify-i18n.cjs`：封存的中文原生尺寸基准与此前独立提示词方案的验收脚本；当前预览使用上项脚本，旧报告保留当时事实。
 
-原 PNG 的 Git LFS 工作与用户已有改动保持现状。本轮不提交、推送或改写历史，也不自动安装到 Applications。1.6.0 封存包及其报告位于 `release/` 和 `release/archives/1.6.0/`；当前远程流程和历史单目录流程的源码检查与桌面验证证据另存 `.verification/`，不覆盖旧包的验证结果。
+原 PNG 的 Git LFS 工作与用户已有改动保持现状。本轮不提交、推送或改写历史，也不自动安装到 Applications。1.6.0 封存包及其报告位于 `release/` 和 `release/archives/1.6.0/`；1.6.1 的应用与验证报告位于 `release/archives/1.6.1/`，桌面截图与独立测试记录另存 `.verification/`，不覆盖旧包的验证结果。

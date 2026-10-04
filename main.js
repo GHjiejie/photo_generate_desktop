@@ -15,8 +15,8 @@ if (process.env.PORTRAIT_STUDIO_USER_DATA_DIR && path.isAbsolute(process.env.POR
   const profile = fs.realpathSync(requestedProfile);
   app.setPath('userData', profile);
 }
-// A remote address alone never changes the default local backend.
-const backend = process.env.PORTRAIT_STUDIO_BACKEND === 'remote' ? 'remote' : 'local';
+// Distributed builds run locally; remote code is retained for explicit source development.
+const backend = !app.isPackaged && process.env.PORTRAIT_STUDIO_BACKEND === 'remote' ? 'remote' : 'local';
 const adapterOptions = {app,BrowserWindow,clipboard,ipcMain,shell,dialog,protocol,nativeImage,rendererURL,trustedSender};
 let libraryAdapter;
 if (backend === 'remote') {

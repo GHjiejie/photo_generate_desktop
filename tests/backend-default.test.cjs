@@ -58,6 +58,14 @@ test('packaged local defaults remain external and preserve the exact legacy root
   assert.equal(f.options.defaultRoot.includes('.asar'), false); assert.equal(f.options.defaultRoot.includes('.app'), false);
 });
 
+test('packaged builds stay local even with an explicit source-only remote override', async () => {
+  const f = await mainFixture({ PORTRAIT_STUDIO_BACKEND: 'remote', PORTRAIT_STUDIO_REMOTE_BASE_URL: 'https://unused.invalid/', PORTRAIT_STUDIO_REMOTE_AUTHORIZATION: 'unused test value' }, true);
+  assert.equal(f.selected, 'local');
+  assert.equal(f.loaded.includes('./remote-electron.cjs'), false);
+  assert.equal(f.options.defaultRoot, f.defaults.root);
+  assert.deepEqual(Array.from(f.windows[0].webPreferences.additionalArguments), ['--portrait-studio-backend=local']);
+});
+
 test('main configures only the selected profile before constructing the adapter, and awaits its local disposal', async () => {
   const f = await mainFixture({ PORTRAIT_STUDIO_USER_DATA_DIR: '/owned-temp-profile' });
   assert.ok(f.operations.findIndex(row => row[0] === 'profile') < f.operations.findIndex(row => row[0] === 'factory'));
