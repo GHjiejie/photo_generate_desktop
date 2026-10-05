@@ -10,6 +10,11 @@ import DeleteConfirm from './components/DeleteConfirm.jsx';
 import BatchImportDialog from './components/BatchImportDialog.jsx';
 import BatchProcessDialog from './components/BatchProcessDialog.jsx';
 import Toast from './components/Toast.jsx';
+import useFavorites from './useFavorites.js';
+import useTags from './useTags.js';
+import { tagKey, tagCatalog } from './tags.mjs';
+import { TagFilter } from './components/ImageTags.jsx';
+import CompareDialog, { CompareTray } from './components/Compare.jsx';
 import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
@@ -44,18 +49,34 @@ export default function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [processOpen, setProcessOpen] = useState(false);
+  const [comparisonSelection, setComparisonSelection] = useState({ scope: null, ids: [] });
+  const [comparisonItems, setComparisonItems] = useState(null);
   const searchRef = useRef(null);
   const timers = useRef({});
   const busyRef = useRef(connected);
   const selectionRequest = useRef(0);
   const editorSession = useRef(0);
-  const items = library.configured ? library.items : [];
+  const lastRandomId = useRef(null);
+  const items = library.configured ? library.items : initialLibrary.items;
+  const favoriteScope = library.configured && library.root && (!remoteBackend || connection.endpoint)
+    ? JSON.stringify([remoteBackend ? 'remote' : 'local', remoteBackend ? connection.endpoint : '', library.root]) : null;
+  const { favoriteIds, toggleFavorite, storageFailed } = useFavorites(favoriteScope, items);
+  const { tagsById, setTags, storageFailed: tagsStorageFailed } = useTags(favoriteScope, items);
+  const catalog = useMemo(() => tagCatalog(items, tagsById), [items, tagsById]);
+  const [tagFilter, setTagFilter] = useState({ scope: null, value: '' });
+  const activeTag = tagFilter.scope === favoriteScope ? tagFilter.value : '';
+  const comparisonIds = comparisonSelection.scope === favoriteScope ? comparisonSelection.ids : [];
+  const comparisonCandidates = comparisonIds.map(id => items.find(item => item.id === id)).filter(Boolean);
+  const [favoriteView, setFavoriteView] = useState({ scope: null, only: false });
+  const favoritesOnly = favoriteView.scope === favoriteScope && favoriteView.only;
+  const favoriteCount = items.filter(item => favoriteIds.has(item.id)).length;
   const visible = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return items.filter(item => !term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn].filter(value => value != null).join(' ').toLowerCase().includes(term));
-  }, [items, query]);
+    return items.filter(item => (!favoritesOnly || favoriteIds.has(item.id)) && (!activeTag || (tagsById[item.id] ?? []).some(name => tagKey(name) === activeTag)) && (!term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn, ...(tagsById[item.id] ?? [])].filter(value => value != null).join(' ').toLowerCase().includes(term)));
+  }, [items, query, favoritesOnly, favoriteIds, activeTag, tagsById]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen);
+  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen || comparisonItems);
+  const canCompare = connected && library.configured && !libraryError;
   const canManage = desktop && library.configured && library.writable && !libraryError && (!remoteBackend || connection.status === 'connected' && platformSessionActive(connection.authentication));
   const canBatchDelete = browserPreview
     ? library.configured && !libraryError && typeof bridge?.deletePortrait === 'function'
@@ -69,8 +90,15 @@ export default function App() {
     }
     setToast(message);
     clearTimeout(timers.current.toast);
-    timers.current.toast = setTimeout(() => setToast(''), message?.key === 'app.batchDeletePartial' ? 6500 : 2600);
+    timers.current.toast = setTimeout(() => setToast(''), ['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly'].includes(message?.key) ? 6500 : 2600);
   }, [remoteBackend]);
+  useEffect(() => { if (storageFailed) showToast({ key: 'favorites.sessionOnly' }); }, [storageFailed, showToast]);
+  useEffect(() => { if (tagsStorageFailed) showToast({ key: 'tags.sessionOnly' }); }, [tagsStorageFailed, showToast]);
+  useEffect(() => {
+    lastRandomId.current = null;
+    setFavoriteView({ scope: favoriteScope, only: false }); setTagFilter({ scope: favoriteScope, value: '' });
+    setComparisonSelection({ scope: favoriteScope, ids: [] }); setComparisonItems(null);
+  }, [favoriteScope, library.root]);
   const applySnapshot = useCallback(snapshot => {
     if (remoteBackend && snapshot.authentication && !platformSessionActive(snapshot.authentication)) {
       setLibrary(initialLibrary); setLibraryError({ code: 'SESSION_EXPIRED' });
@@ -107,6 +135,7 @@ export default function App() {
   useEffect(() => {
     const available = new Set(items.map(item => item.id));
     setSelectedIds(previous => [...previous].every(id => available.has(id)) ? previous : new Set([...previous].filter(id => available.has(id))));
+    setComparisonSelection(previous => previous.ids.every(id => available.has(id)) ? previous : { ...previous, ids: previous.ids.filter(id => available.has(id)) });
   }, [items]);
   useEffect(() => { if (!canBatchDelete) { setSelectionMode(false); setSelectedIds(new Set()); } }, [canBatchDelete]);
   useEffect(() => {
@@ -269,7 +298,61 @@ export default function App() {
   function cycle(direction) {
     if (!selected || !visible.length || managing) return;
     const index = visible.findIndex(item => item.id === selected.id);
-    openDetail(visible[(index + direction + visible.length) % visible.length].id);
+    const nextIndex = index < 0 ? (direction > 0 ? 0 : visible.length - 1) : (index + direction + visible.length) % visible.length;
+    openDetail(visible[nextIndex].id);
+  }
+  function openRandom() {
+    if (busyRef.current || managing || selectionMode || !visible.length) return;
+    const previousId = selected?.id ?? lastRandomId.current;
+    const alternatives = visible.filter(item => item.id !== previousId);
+    const pool = alternatives.length ? alternatives : visible;
+    const next = pool[Math.floor(Math.random() * pool.length)];
+    lastRandomId.current = next.id;
+    openDetail(next.id);
+  }
+  function changeFavoriteView(only) {
+    if (busyRef.current || managing) return;
+    setFavoriteView({ scope: favoriteScope, only });
+  }
+  function toggleItemFavorite(id) {
+    if (busyRef.current || libraryError || !favoriteScope || selectionMode || managing) return;
+    toggleFavorite(id);
+  }
+  function saveItemTags(id, names) {
+    if (busyRef.current || libraryError || !favoriteScope || managing) return;
+    setTags(id, names);
+  }
+  function changeTagFilter(value) {
+    if (busyRef.current || managing) return;
+    setTagFilter({ scope: favoriteScope, value });
+  }
+  function resetFilters() {
+    if (busyRef.current || managing) return;
+    setQuery(''); setTagFilter({ scope: favoriteScope, value: '' }); setFavoriteView({ scope: favoriteScope, only: false });
+  }
+  function toggleComparison(id) {
+    if (busyRef.current || managing || selectionMode || !canCompare || !items.some(item => item.id === id)) return;
+    if (!comparisonIds.includes(id) && comparisonIds.length >= 4) { showToast({ key: 'compare.limit' }); return; }
+    setComparisonSelection(previous => {
+      const ids = previous.scope === favoriteScope ? previous.ids : [];
+      return { scope: favoriteScope, ids: ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id].slice(0, 4) };
+    });
+  }
+  function clearComparison() {
+    if (!busyRef.current && !managing && !selectionMode) setComparisonSelection({ scope: favoriteScope, ids: [] });
+  }
+  async function openComparison() {
+    if (!canCompare || comparisonCandidates.length < 2 || busyRef.current || managing || selectionMode) return;
+    await exclusive('compare', async () => {
+      try {
+        const snapshot = await readSnapshot();
+        const available = new Set(snapshot.items.map(item => item.id));
+        if (comparisonCandidates.some(item => !available.has(item.id))) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+        const current = [];
+        for (const item of comparisonCandidates) current.push(unwrap(await bridge.libraryGet(item.id)).item);
+        closeDetail(); setComparisonItems(current);
+      } catch (error) { showToast(error); }
+    });
   }
   function beginCreate() {
     if (!canManage || busyRef.current) return;
@@ -453,11 +536,35 @@ export default function App() {
   const toastText = toast?.key ? t(toast.key, { ...toast.params, ...(toast.params?.error ? { error: describeError(toast.params.error) } : {}), ...(toast.params?.languageKey ? { language: t(toast.params.languageKey) } : {}) }) : describeError(toast);
   const visibleLibrary = { ...library, writable: desktop ? canManage : library.writable, connected: remoteBackend ? connection.status === 'connected' : library.configured, connectionStatus: remoteBackend ? pending === 'loading' ? 'connecting' : connection.status : undefined };
   return <RemoteConnectionContext.Provider value={{ backend: remoteBackend ? 'remote' : 'local', root: library.root, configured: library.configured, allowed: (remoteBackend ? connectionSupported : desktop && typeof bridge?.chooseLibrary === 'function') && !pending && !managing, onOpen: remoteBackend ? openConnectionSettings : configureLibrary, onAuthenticationError: error => { if (remoteBackend && isAuthenticationError(error)) showToast(error); } }}>
-    <div className="app-shell"><Sidebar portraits={items} />
-      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} onProcess={() => { if (connected && library.configured && !busyRef.current && !managing) setProcessOpen(true); }} canBatchDelete={canBatchDelete && items.length > 0} onSelect={beginSelection} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} selectedIds={selectedIds} onToggleSelect={toggleSelect} onBatchDelete={beginBatchDelete} batchMode={selectionMode} canBatchDelete={canBatchDelete} pending={Boolean(pending) || managing} onBeginSelection={beginSelection} onEndSelection={endSelection} onToggleVisible={toggleVisibleSelection} onClearSelection={() => { if (!busyRef.current && !managing) setSelectedIds(new Set()); }} /></main>
+    <div className="app-shell"><Sidebar portraits={items} favoriteCount={favoriteCount} favoritesOnly={favoritesOnly} onFavoriteView={changeFavoriteView} favoritesAvailable={Boolean(favoriteScope)} pending={Boolean(pending) || managing} />
+      <main className={`main-content${comparisonCandidates.length ? ' has-comparison' : ''}`}>
+        <Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)}
+          onRandom={openRandom} randomDisabled={Boolean(pending) || managing || selectionMode || !visible.length}
+          onCompare={openComparison} compareCount={comparisonCandidates.length} compareDisabled={!canCompare || comparisonCandidates.length < 2 || Boolean(pending) || managing || selectionMode}
+          library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing}
+          onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate}
+          onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }}
+          onProcess={() => { if (connected && library.configured && !busyRef.current && !managing) setProcessOpen(true); }}
+          canBatchDelete={canBatchDelete && items.length > 0} onSelect={beginSelection} />
+        {notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}
+        <TagFilter catalog={catalog} value={activeTag} onChange={changeTagFilter} disabled={Boolean(pending) || managing} />
+        <Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query}
+          favoriteIds={favoriteIds} favoritesOnly={favoritesOnly} favoritesAvailable={Boolean(favoriteScope) && !libraryError} onToggleFavorite={toggleItemFavorite} onShowAll={() => changeFavoriteView(false)}
+          tagFiltered={Boolean(activeTag)} onResetFilters={resetFilters} comparisonIds={comparisonIds} canCompare={canCompare} onToggleCompare={toggleComparison}
+          selectedIds={selectedIds} onToggleSelect={toggleSelect} onBatchDelete={beginBatchDelete} batchMode={selectionMode} canBatchDelete={canBatchDelete}
+          pending={Boolean(pending) || managing} onBeginSelection={beginSelection} onEndSelection={endSelection} onToggleVisible={toggleVisibleSelection}
+          onClearSelection={() => { if (!busyRef.current && !managing) setSelectedIds(new Set()); }} />
+      </main>
     </div>
-    <Toast message={toastText} error={toast?.key === 'app.batchDeletePartial'} />
-    <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete} />
+    <CompareTray items={comparisonCandidates} disabled={Boolean(pending) || managing || selectionMode} onRemove={toggleComparison} onClear={clearComparison} onOpen={openComparison} />
+    <Toast message={toastText} error={['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly'].includes(toast?.key)} />
+    <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle}
+      canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete}
+      favorite={Boolean(selected && favoriteIds.has(selected.id))} favoritesAvailable={Boolean(favoriteScope) && !libraryError} onToggleFavorite={toggleItemFavorite}
+      onRandom={openRandom} randomDisabled={Boolean(pending) || managing || selectionMode || !visible.length}
+      tags={selected ? tagsById[selected.id] ?? [] : []} catalog={catalog} onTagsChange={saveItemTags}
+      comparing={Boolean(selected && comparisonIds.includes(selected.id))} canCompare={canCompare} onToggleCompare={toggleComparison} />
+    <CompareDialog items={comparisonItems} language={language} onClose={() => setComparisonItems(null)} onCopy={copyPrompt} onOpenImage={openImage} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
     <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />

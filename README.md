@@ -8,12 +8,27 @@ React 19 + Vite + Electron 本地桌面应用，当前源码版本 1.6.1。前�
 
 ## 运行与检查
 
+当前开发源码也支持收藏与随机灵感：图卡悬停或键盘聚焦时可点击左上角星标，详情页也可收藏／取消收藏；侧栏“我的收藏”只显示当前素材库的收藏，并与搜索关键词同时筛选。“随机灵感”从当前结果中打开一张图片，详情左上角可继续随机浏览；有多张候选图片时避免连续重复同一张。空结果和批量删除选择期间禁用随机入口。
+
+收藏按素材库目录分别保存在当前应用 profile 中，重新启动后恢复；浏览器预览单独保存在该浏览器中。收藏不写入图片或提示词，也不随素材库文件夹同步到其他设备。切换素材库返回全部图片视图，成功刷新／删除后自动清理已不存在的图片收藏。无法保存偏好时仍可在当前会话收藏，并显示保存失败提示。新增入口和空状态均支持中文／English、深浅主题和键盘操作。
+
+`npm run test:inspiration` 使用两个临时图库和独立 profile 运行实际 Electron 页面，验证收藏、搜索、随机浏览、切库隔离、应用重启、批量选择、双语主题、损坏偏好与保存失败恢复；报告和截图写入 `.verification/inspiration-*`。
+
+本轮参考了 [Eagle 的标签检索](https://en.eagle.cool/support/desktop/search)、[Lightroom Classic 的并排／多图比较](https://helpx.adobe.com/lightroom-classic/desktop/viewing-photos/browse-compare-photos.html) 和 [PureRef 的参考图组织](https://www.pureref.com/handbook/features/)，增加以下功能：
+
+- **自定义标签**：在详情页输入标签，按 Enter 或点击“添加”；支持中英文逗号分隔多个标签、已有标签建议和逐个移除。每张图片最多 12 个标签，每个标签最多 32 个字符。顶部搜索也会搜索标签，标签筛选可与搜索、收藏叠加。标签按素材库分别保存在当前应用 profile，重启后恢复；浏览器预览单独保存。标签属于当前设备的整理偏好，不写入原图、提示词或素材库索引，也不随图库目录同步。保存失败时保留当前会话编辑并提示。
+- **图片与提示词对比**：从图卡右下角或详情页加入 2–4 张候选图片，底部候选栏支持移除／清空，跨搜索和收藏筛选保留选择。点击“开始对比”或顶部对比图标后读取最新记录，完整图片与当前语言的完整提示词并排显示，可逐张复制提示词或打开原图。切换素材库清空候选，刷新／删除后移除已经不存在的候选；批量删除选择期间暂停对比操作。
+
+`npm run test:organize` 使用隔离临时图库和 profile 验证标签、对比、原始字节保留、切库与重启、损坏偏好与保存失败；报告和截图写入 `.verification/organize-*`。
+
 ```sh
 npm ci
 npm start
 npm run check
 npm test
 npm run test:delete
+npm run test:inspiration
+npm run test:organize
 npm run test:server
 npm run test:remote
 ```
