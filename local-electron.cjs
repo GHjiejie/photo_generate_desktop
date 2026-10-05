@@ -199,6 +199,15 @@ function createLocalAdapter({app,ipcMain,dialog,shell,protocol,nativeImage,Brows
     register('library-create',(_event,value)=>mutate('create',value));
     register('library-update',(_event,value)=>mutate('update',value));
     register('library-delete',(_event,value)=>mutate('remove',value));
+    register('library-delete-batch',async(_event,value)=>{
+      if(switching)throw new LibraryError('BUSY','正在切换素材目录');
+      if(!plain(value)||Object.keys(value).some(key=>!['items','expectedVersion','confirmed'].includes(key)))throw new LibraryError('INVALID_INPUT','批量删除参数包含不允许的字段');
+      activeOperations++;
+      try{
+        const result=await completeWrite(()=>library.removeBatch(value));
+        return {...result,snapshot:decorate(result.snapshot)};
+      }finally{activeOperations--;}
+    });
     register('library-image-release',(_event,token)=>{
       if(typeof token!=='string'||!/^[0-9a-f-]{36}$/.test(token))throw new LibraryError('INVALID_INPUT','所选图片凭据无效');
       selections.delete(token);return {released:true};

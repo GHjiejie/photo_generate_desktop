@@ -8,6 +8,7 @@ import DetailDialog from './components/DetailDialog.jsx';
 import PortraitEditor from './components/PortraitEditor.jsx';
 import DeleteConfirm from './components/DeleteConfirm.jsx';
 import BatchImportDialog from './components/BatchImportDialog.jsx';
+import BatchProcessDialog from './components/BatchProcessDialog.jsx';
 import Toast from './components/Toast.jsx';
 import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
@@ -39,7 +40,10 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [editor, setEditor] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
+  const [processOpen, setProcessOpen] = useState(false);
   const searchRef = useRef(null);
   const timers = useRef({});
   const busyRef = useRef(connected);
@@ -51,8 +55,11 @@ export default function App() {
     return items.filter(item => !term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn].filter(value => value != null).join(' ').toLowerCase().includes(term));
   }, [items, query]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || batchOpen || connectionOpen);
+  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen);
   const canManage = desktop && library.configured && library.writable && !libraryError && (!remoteBackend || connection.status === 'connected' && platformSessionActive(connection.authentication));
+  const canBatchDelete = browserPreview
+    ? library.configured && !libraryError && typeof bridge?.deletePortrait === 'function'
+    : canManage && typeof bridge?.[remoteBackend ? 'deletePortrait' : 'deletePortraits'] === 'function';
   const showToast = useCallback(message => {
     if (remoteBackend && isConnectionError(message)) {
       setConnection(previous => ({ ...previous, ...(isAuthenticationError(message) ? { authentication: null } : {}), status: connectionStatusForError(message) }));
@@ -62,7 +69,7 @@ export default function App() {
     }
     setToast(message);
     clearTimeout(timers.current.toast);
-    timers.current.toast = setTimeout(() => setToast(''), 2600);
+    timers.current.toast = setTimeout(() => setToast(''), message?.key === 'app.batchDeletePartial' ? 6500 : 2600);
   }, [remoteBackend]);
   const applySnapshot = useCallback(snapshot => {
     if (remoteBackend && snapshot.authentication && !platformSessionActive(snapshot.authentication)) {
@@ -96,6 +103,12 @@ export default function App() {
     return () => { live = false; };
   }, [connected, bridge, connectionSupported, applySnapshot]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+  useEffect(() => { setSelectedIds(new Set()); setSelectionMode(false); }, [library.root]);
+  useEffect(() => {
+    const available = new Set(items.map(item => item.id));
+    setSelectedIds(previous => [...previous].every(id => available.has(id)) ? previous : new Set([...previous].filter(id => available.has(id))));
+  }, [items]);
+  useEffect(() => { if (!canBatchDelete) { setSelectionMode(false); setSelectedIds(new Set()); } }, [canBatchDelete]);
   useEffect(() => {
     if (!remoteBackend || !connection.authentication) return;
     const expiresAt = Date.parse(connection.authentication.expiresAt);
@@ -209,7 +222,7 @@ export default function App() {
     });
   }
   async function openDetail(id) {
-    if (busyRef.current || managing) return;
+    if (busyRef.current || managing || selectionMode) return;
     const request = ++selectionRequest.current;
     try {
       const item = library.configured ? unwrap(await bridge.libraryGet(id)).item : items.find(value => value.id === id);
@@ -218,10 +231,14 @@ export default function App() {
   }
   useEffect(() => { setCopiedId(null); }, [language]);
   useEffect(() => {
-    const onKey = event => { if (!managing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); } };
+    const onKey = event => {
+      if (event.defaultPrevented) return;
+      if (!managing && !pending && selectionMode && event.key === 'Escape') { setSelectionMode(false); setSelectedIds(new Set()); }
+      if (!managing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [managing]);
+  }, [managing, pending, selectionMode]);
   async function copyPrompt(item, fromCard = false) {
     if (!item) return;
     try {
@@ -326,6 +343,33 @@ export default function App() {
   function acknowledgeConflict() {
     setEditor(previous => previous?.conflict ? { ...previous, version: previous.conflict.revision, item: previous.conflict.item ?? previous.item, itemRevision: previous.conflict.item?.revision, conflict: null, reviewOpen: false, error: '' } : previous);
   }
+  function toggleSelect(id) {
+    if (!canBatchDelete || !selectionMode || busyRef.current || managing) return;
+    setSelectedIds(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+  function beginSelection() {
+    if (!canBatchDelete || busyRef.current || managing || !items.length) return;
+    closeDetail(); setSelectionMode(true);
+  }
+  function endSelection() {
+    if (busyRef.current || managing) return;
+    setSelectedIds(new Set()); setSelectionMode(false);
+  }
+  function toggleVisibleSelection() {
+    if (!canBatchDelete || !selectionMode || busyRef.current || managing) return;
+    setSelectedIds(previous => {
+      const next = new Set(previous), allSelected = visible.every(item => previous.has(item.id));
+      visible.forEach(item => { if (allSelected) next.delete(item.id); else next.add(item.id); });
+      return next;
+    });
+  }
+  function beginBatchDelete() {
+    if (!canBatchDelete || selectedIds.size === 0 || busyRef.current || managing) return;
+    const selection = items.filter(item => selectedIds.has(item.id)).map(item => ({ id: item.id, expectedRevision: item.revision }));
+    if (!selection.length) return;
+    setDeleteTarget({ count: selection.length, ids: selection.map(item => item.id), items: selection, version: library.revision, preview: browserPreview, error: '', conflicted: false });
+  }
+
   async function beginDelete(item) {
     if (!canManage || busyRef.current) return;
     await exclusive('read', async () => {
@@ -337,7 +381,52 @@ export default function App() {
     });
   }
   async function confirmDelete() {
-    if (!deleteTarget || deleteTarget.conflicted || !canManage) return;
+    if (!deleteTarget || deleteTarget.conflicted || (deleteTarget.ids ? !canBatchDelete : !canManage)) return;
+    if (deleteTarget.ids) {
+      await exclusive('delete', async () => {
+        try {
+          let result;
+          if (desktop && !remoteBackend) {
+            result = unwrap(await bridge.deletePortraits({ items: deleteTarget.items, expectedVersion: deleteTarget.version, confirmed: true }));
+          } else {
+            // The retained remote API and preview use their existing fixed route.
+            let snapshot = library, errorCode = null;
+            const deletedIds = [];
+            for (const item of deleteTarget.items) {
+              try {
+                snapshot = unwrap(await bridge.deletePortrait(browserPreview ? { id: item.id } : { ...item, expectedVersion: snapshot.revision, confirmed: true }));
+                deletedIds.push(item.id);
+              } catch (error) {
+                if (isAuthenticationError(error)) throw error;
+                errorCode = error.code || 'IO_ERROR';
+                snapshot = await readSnapshot();
+                break;
+              }
+            }
+            result = { snapshot, report: { deletedIds, remainingIds: deleteTarget.ids.filter(id => !deletedIds.includes(id)), errorCode } };
+          }
+          applySnapshot(result.snapshot);
+          closeDetail(); setDeleteTarget(null);
+          const { deletedIds, remainingIds, errorCode } = result.report;
+          setSelectedIds(new Set(remainingIds));
+          if (!remainingIds.length) {
+            setSelectionMode(false);
+            showToast({ key: browserPreview ? 'app.batchPreviewDeleted' : 'app.batchDeleted', params: { count: deletedIds.length } });
+          } else {
+            showToast({ key: 'app.batchDeletePartial', params: { deleted: deletedIds.length, remaining: remainingIds.length, error: { code: errorCode } } });
+          }
+        } catch (error) {
+          if (isAuthenticationError(error)) { showToast(error); return; }
+          const conflicted = ['CONFLICT', 'NOT_FOUND', 'RECOVERY_CONFLICT'].includes(error.code);
+          if (conflicted) {
+            try { await readSnapshot(); }
+            catch (refreshError) { setLibraryError(refreshError); showToast(refreshError); }
+          }
+          setDeleteTarget(previous => previous ? { ...previous, error: conflicted ? { key: 'app.batchDeleteConflict' } : error, conflicted } : previous);
+        }
+      });
+      return;
+    }
     await exclusive('delete', async () => {
       try {
         const snapshot = unwrap(await bridge.deletePortrait({ id: deleteTarget.item.id, expectedVersion: deleteTarget.version, expectedRevision: deleteTarget.item.revision, confirmed: true }));
@@ -365,13 +454,14 @@ export default function App() {
   const visibleLibrary = { ...library, writable: desktop ? canManage : library.writable, connected: remoteBackend ? connection.status === 'connected' : library.configured, connectionStatus: remoteBackend ? pending === 'loading' ? 'connecting' : connection.status : undefined };
   return <RemoteConnectionContext.Provider value={{ backend: remoteBackend ? 'remote' : 'local', root: library.root, configured: library.configured, allowed: (remoteBackend ? connectionSupported : desktop && typeof bridge?.chooseLibrary === 'function') && !pending && !managing, onOpen: remoteBackend ? openConnectionSettings : configureLibrary, onAuthenticationError: error => { if (remoteBackend && isAuthenticationError(error)) showToast(error); } }}>
     <div className="app-shell"><Sidebar portraits={items} />
-      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} /></main>
+      <main className="main-content"><Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)} library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing} onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate} onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }} onProcess={() => { if (connected && library.configured && !busyRef.current && !managing) setProcessOpen(true); }} canBatchDelete={canBatchDelete && items.length > 0} onSelect={beginSelection} />{notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}<Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query} selectedIds={selectedIds} onToggleSelect={toggleSelect} onBatchDelete={beginBatchDelete} batchMode={selectionMode} canBatchDelete={canBatchDelete} pending={Boolean(pending) || managing} onBeginSelection={beginSelection} onEndSelection={endSelection} onToggleVisible={toggleVisibleSelection} onClearSelection={() => { if (!busyRef.current && !managing) setSelectedIds(new Set()); }} /></main>
     </div>
-    <Toast message={toastText} />
+    <Toast message={toastText} error={toast?.key === 'app.batchDeletePartial'} />
     <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle} canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
     <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />
+    <BatchProcessDialog open={processOpen} items={items} language={language} onClose={() => setProcessOpen(false)} />
     {remoteBackend && <RemoteConnectionDialog open={connectionOpen} connection={connection} allowed={connectionSupported} pending={connectionOpen ? pending : ''} onClose={() => { if (!busyRef.current) setConnectionOpen(false); }} onConnect={connectServer} onSignIn={signInServer} onSignOut={signOutServer} />}
   </RemoteConnectionContext.Provider>;
 }

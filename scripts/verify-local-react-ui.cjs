@@ -58,6 +58,12 @@ let browser;
           window.__localState.items = window.__localState.items.filter(item => item.id !== payload.id);
           return window.__localState;
         }),
+        deletePortraits: async payload => operation('deletePortraits', payload, () => {
+          const deletedIds = payload.items.map(item => item.id);
+          window.__localState.revision += deletedIds.length;
+          window.__localState.items = window.__localState.items.filter(item => !deletedIds.includes(item.id));
+          return { snapshot: window.__localState, report: { deletedIds, remainingIds: [], errorCode: null } };
+        }),
         chooseBatchDirectory: async () => operation('chooseBatchDirectory', undefined, () => ({ selectionId: 'local-source-directory', path: '/isolated-fixture/source', imageCount: 1, manifests: [{ candidateId: 'local-manifest', relativePath: 'prompts.json', recordCount: 1 }] })),
         previewBatch: async payload => operation('previewBatch', payload, () => ({ previewId: 'local-preview', root: window.__localState.root, revision: window.__localState.revision, canImport: true, total: 1, matched: 1, importable: 1, skipped: 0, conflicts: 0, items: [{ id: 2, label: 'Batch fixture', status: 'importable', sourceFileName: 'fixture.png' }], issues: [], unpaired: [] })),
         commitBatch: async payload => operation('commitBatch', payload, () => {
@@ -183,6 +189,28 @@ let browser;
     expect(await page.evaluate(() => window.__localCalls.filter(call => call.action === 'copyText').length)).toBe(1);
     expect(await page.evaluate(() => window.__localCalls.filter(call => call.action === 'copyPrompt').length)).toBe(0);
     report.checks.push('Local browser preview retains read-only controls and local path metadata without exposing server settings');
+
+    await page.locator('#closeDialog').click();
+    await page.locator('#beginBatchDelete').click(); await page.locator('#selectVisible').click();
+    await page.locator('#batchDeleteSelected').click();
+    await expect(page.locator('.delete-description')).toHaveText(messages.en['delete.previewDescription']);
+    await expect(page.locator('#deleteConfirm')).toHaveText(messages.en['delete.previewConfirm']);
+    await page.locator('#deleteCancel').click(); await expect(page.locator('.portrait-card')).toHaveCount(1);
+    await page.locator('#batchDeleteSelected').click(); await page.locator('#deleteConfirm').click();
+    await expect(page.locator('.portrait-card')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__localCalls.filter(call => call.action === 'deletePortrait').at(-1).payload)).toEqual({ id: 1 });
+    report.checks.push('Browser batch removal retains the session-only preview route and wording, with cancellation and a fixed id-only request');
+
+    await load('zh', '&readonly=1'); await menu();
+    await expect(page.locator('#libraryDeleteBatch')).toBeDisabled(); await menu();
+    await expect(page.locator('#beginBatchDelete')).toHaveCount(0); await expect(page.locator('.select-checkbox')).toHaveCount(0);
+    report.checks.push('A readonly desktop library exposes no active batch-delete controls');
+
+    await load(); await page.locator('#beginBatchDelete').click(); await page.locator('#selectVisible').click();
+    await menu(); await page.locator('#libraryConfigure').click();
+    await expect(page.locator('.select-checkbox')).toHaveCount(0);
+    await page.locator('#beginBatchDelete').click(); await expect(page.locator('#selectedCount')).toHaveText(messages.zh['gallery.selectedCount'].replace('{count}', '0'));
+    report.checks.push('Switching the save folder clears the old selection even when the new library uses the same image ID');
 
     for (const suffix of ['&legacy=1', '&expired=1']) {
       await load('zh', suffix); await menu(); await expect(page.locator('#libraryCreate')).toBeEnabled(); await expect(page.locator('#libraryBatch')).toBeEnabled(); await menu();

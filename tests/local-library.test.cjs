@@ -82,6 +82,86 @@ async function records(root) {
   return result;
 }
 
+async function batchDeleteFixture(t, options) {
+  const f = await fixture(t, options);
+  let state = f.state;
+  for (const id of [201, 202, 203]) state = await f.library.create(payload(state, id), f.source);
+  const request = { expectedVersion: state.revision, confirmed: true, items: state.items.map(item => ({ id: item.id, expectedRevision: item.revision })) };
+  return { ...f, state, request };
+}
+
+test('batch deletion removes only the selected images and retains complete recovery copies across restart', async t => {
+  const f = await batchDeleteFixture(t);
+  const retained = await f.library.imageForId(202), retainedBytes = await fs.readFile(retained.path);
+  const result = await f.library.removeBatch({ ...f.request, items: [f.request.items[0], f.request.items[2]] });
+  assert.deepEqual(result.report, { deletedIds: [201, 203], remainingIds: [], errorCode: null });
+  assert.deepEqual(result.snapshot.items.map(item => item.id), [202]);
+  assert.equal(result.snapshot.revision, f.state.revision + 2);
+  assert.deepEqual(await fs.readFile(retained.path), retainedBytes);
+  assert.equal((await fs.readdir(f.trash)).length, 2);
+  for (const entry of await records(f.root)) {
+    assert.equal(entry.record.operation, 'remove'); assert.equal(entry.record.status, 'deleted');
+    const original = f.state.items.find(item => item.id === entry.record.item.id);
+    assert.deepEqual(entry.record.item.prompts, original.prompts);
+    assert.deepEqual(await fs.readFile(path.join(entry.entry, entry.names.find(name => /^image\./.test(name)))), await fs.readFile(f.source));
+  }
+  assert.deepEqual(await f.createLibrary().open(f.root), result.snapshot);
+});
+
+test('batch confirmation, payload and every selected revision are validated before any deletion', async t => {
+  const f = await batchDeleteFixture(t), before = await fs.readFile(path.join(f.root, '.portrait-studio/library.json'));
+  const attempts = [
+    [{ ...f.request, confirmed: false }, 'CONFIRMATION_REQUIRED'],
+    [{ ...f.request, items: [] }, 'INVALID_DATA'],
+    [{ ...f.request, items: [f.request.items[0], f.request.items[0]] }, 'INVALID_DATA'],
+    [{ ...f.request, path: f.source }, 'INVALID_DATA'],
+    [{ ...f.request, items: [f.request.items[0], { ...f.request.items[1], path: f.source }] }, 'INVALID_DATA'],
+    [{ ...f.request, items: [f.request.items[0], { id: 202, expectedRevision: 2 }] }, 'CONFLICT'],
+    [{ ...f.request, expectedVersion: f.state.revision - 1 }, 'CONFLICT'],
+    [{ ...f.request, items: [f.request.items[0], { id: 999, expectedRevision: 1 }] }, 'NOT_FOUND'],
+  ];
+  for (const [request, code] of attempts) {
+    await rejectCode(() => f.library.removeBatch(request), code);
+    assert.deepEqual(await fs.readFile(path.join(f.root, '.portrait-studio/library.json')), before);
+    assert.equal((await f.library.list()).items.length, 3);
+    assert.deepEqual(await fs.readdir(f.trash), []);
+    assert.deepEqual(await records(f.root), []);
+  }
+});
+
+test('batch deletion stops on Trash failure, reports committed IDs, and supports retry of the remaining selection', async t => {
+  const f = await batchDeleteFixture(t);
+  let attempts = 0;
+  const failing = f.createLibrary({ trashItem: async file => {
+    if (++attempts === 2) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    await fs.rename(file, path.join(f.trash, path.basename(file)));
+  } });
+  await failing.open(f.root);
+  const result = await failing.removeBatch(f.request);
+  assert.deepEqual(result.report, { deletedIds: [201], remainingIds: [202, 203], errorCode: 'NO_PERMISSION' });
+  assert.deepEqual(result.snapshot.items.map(item => item.id), [202, 203]);
+  assert.equal(attempts, 2, 'the third image is not attempted after a failure');
+  for (const item of result.snapshot.items) assert.deepEqual(await fs.readFile((await failing.imageForId(item.id)).path), await fs.readFile(f.source));
+  const recovered = await f.createLibrary().open(f.root);
+  assert.deepEqual(recovered, result.snapshot);
+  const retried = await failing.removeBatch({ ...f.request, expectedVersion: result.snapshot.revision, items: f.request.items.slice(1) });
+  assert.deepEqual(retried.report, { deletedIds: [202, 203], remainingIds: [], errorCode: null });
+  assert.deepEqual(retried.snapshot.items, []);
+});
+
+test('a crash during the second batch deletion recovers that item and keeps the first committed deletion', async t => {
+  const f = await batchDeleteFixture(t);
+  let trashes = 0;
+  const crashing = f.createLibrary({ fault: phase => { if (phase === 'after-trash' && ++trashes === 2) throw Object.assign(new Error('crash'), { crash: true }); } });
+  await crashing.open(f.root);
+  await assert.rejects(() => crashing.removeBatch(f.request), error => error.crash === true);
+  const restarted = f.createLibrary(), state = await restarted.open(f.root);
+  assert.deepEqual(state.items.map(item => item.id), [202, 203]);
+  assert.equal(state.revision, f.state.revision + 1);
+  for (const item of state.items) assert.deepEqual(await fs.readFile((await restarted.imageForId(item.id)).path), await fs.readFile(f.source));
+  assert.deepEqual(await fs.readdir(path.join(f.root, '.portrait-studio/transactions')), []);
+});
+
 test('create, edit, image replacement and confirmed deletion persist real files and complete recovery records', async t => {
   const f = await fixture(t);
   assert.equal(f.state.configured, true);

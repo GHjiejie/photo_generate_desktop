@@ -416,8 +416,41 @@ class LocalLibrary {
   create(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('create', payload, imagePath))); }
   update(payload, imagePath) { return this._enqueue(() => this._locked(() => this._mutate('update', payload, imagePath))); }
   remove(payload) { return this._enqueue(() => this._locked(() => this._mutate('remove', payload))); }
+  removeBatch(payload) { return this._enqueue(() => this._locked(() => this._removeBatch(payload))); }
   previewBatch(plan, options) { return this._enqueue(() => this._locked(() => batches.preview(this, plan, options))); }
   importBatch(plan, options) { return this._enqueue(() => this._locked(() => batches.import(this, plan, options))); }
+
+  async _removeBatch(payload) {
+    if (!isObject(payload) || Object.keys(payload).some(key => !['items', 'expectedVersion', 'confirmed'].includes(key))
+      || !Array.isArray(payload.items) || !payload.items.length || payload.items.length > 10000
+      || payload.items.some(item => !isObject(item) || Object.keys(item).some(key => !['id', 'expectedRevision'].includes(key)) || !idValid(item.id) || !revisionValid(item.expectedRevision))
+      || new Set(payload.items.map(item => item.id)).size !== payload.items.length) fail('INVALID_DATA', '批量删除参数无效，请重新选择素材。');
+    if (payload.confirmed !== true) fail('CONFIRMATION_REQUIRED', '请确认后再将所选素材移到系统废纸篓。');
+    const { index } = await this._load();
+    this._compare(index, payload);
+    // Validate the whole selection before the first write. Keep the library lock
+    // throughout, and reuse each item's existing Trash/recovery transaction.
+    for (const selected of payload.items) {
+      const item = index.items.find(candidate => candidate.id === selected.id);
+      if (!item) fail('NOT_FOUND', '所选素材已不存在，请刷新后重新选择。');
+      this._compare(index, { ...selected, expectedVersion: payload.expectedVersion }, item);
+    }
+    let snapshot = this._public(index);
+    const deletedIds = [];
+    for (const item of payload.items) {
+      try {
+        snapshot = await this._mutate('remove', { ...item, expectedVersion: snapshot.revision, confirmed: true });
+        deletedIds.push(item.id);
+      } catch (error) {
+        if (error.crash || error.code === 'RECOVERY_CONFLICT') throw error;
+        // Stop at the first failure. Successfully committed deletions remain
+        // recoverable; the failed item rolls back through the normal transaction.
+        snapshot = this._public((await this._load()).index);
+        return { snapshot, report: { deletedIds, remainingIds: payload.items.slice(deletedIds.length).map(selected => selected.id), errorCode: translateError(error).code } };
+      }
+    }
+    return { snapshot, report: { deletedIds, remainingIds: [], errorCode: null } };
+  }
 
   async _fault(phase, journal) { if (this.fault) await this.fault(phase, { txId: journal.txId, operation: journal.operation, root: this.root }); }
 

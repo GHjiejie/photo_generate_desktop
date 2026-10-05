@@ -14,6 +14,7 @@
     "package": "npm run build && node scripts/package-local.cjs",
     "dist:mac": "npm run package && node scripts/create-mac-artifacts.cjs",
     "test:batch": "npm run build && node scripts/verify-batch-import.cjs",
+    "test:delete": "npm run build && node scripts/verify-batch-delete.cjs",
     "test:server": "cd server && go test ./...",
     "test:remote": "npm run build && node scripts/verify-remote-native.cjs"
   },

@@ -6,7 +6,7 @@ function Icon({ name }) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{name === 'image' ? <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1.5" /><path d="m21 15-5-5L5 21" /></> : name === 'batch' ? <><rect x="7" y="7" width="14" height="14" rx="2" /><path d="M17 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2m4-2 3-3 7 7" /></> : name === 'refresh' ? <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 7a7 7 0 0 1 11-1l3 6M4 12l3 6a7 7 0 0 0 11-1" /></> : <path d="M3 7V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />}</svg>;
 }
 
-export default function LibraryMenu({ library, desktop, connected, editable, pending, onConfigure, onRefresh, onCreate, onBatch }) {
+export default function LibraryMenu({ library, desktop, connected, editable, pending, onConfigure, onRefresh, onCreate, onBatch, onProcess, canBatchDelete, onSelect }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const controlRef = useRef(null), triggerRef = useRef(null), panelRef = useRef(null), wasOpen = useRef(false);
@@ -38,6 +38,8 @@ export default function LibraryMenu({ library, desktop, connected, editable, pen
       <div className="library-menu-actions"><button id="libraryCreate" className="library-menu-action" type="button" disabled={!canEdit} title={desktopTitle} onClick={() => perform(canEdit, onCreate)}><Icon name="image" /><span>{t('library.import')}</span></button>
       <button id="libraryConfigure" className="library-menu-action" type="button" disabled={!canConfigure} title={desktopTitle} onClick={() => perform(canConfigure, onConfigure)}><Icon name="folder" /><span>{t(configured ? 'sidebar.switch' : 'sidebar.choose')}</span></button>
       <button id="libraryBatch" className="library-menu-action" type="button" disabled={!canEdit} title={desktopTitle} onClick={() => perform(canEdit, onBatch)}><Icon name="batch" /><span>{t('sidebar.batch')}</span></button>
+      <button id="libraryProcess" className="library-menu-action" type="button" disabled={!configured || pending} title={!connected ? t('common.desktopOnly') : undefined} onClick={() => perform(configured && !pending, onProcess)}><Icon name="image" /><span>{t('process.menu')}</span></button>
+      <button id="libraryDeleteBatch" className="library-menu-action" type="button" disabled={!canBatchDelete || pending} onClick={() => perform(canBatchDelete && !pending, onSelect)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg><span>{t('gallery.batchDelete')}</span></button>
       <button id="libraryRefresh" className="library-menu-action" type="button" disabled={!canRefresh} onClick={() => perform(canRefresh, onRefresh)}><Icon name="refresh" /><span>{t('sidebar.refresh')}</span></button></div>
     </div>}
   </div>;

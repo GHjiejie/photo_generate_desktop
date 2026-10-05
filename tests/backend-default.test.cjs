@@ -149,3 +149,39 @@ test('local disposal waits for a started delete transaction before completing', 
   const persisted = JSON.parse(await fs.readFile(path.join(f.root, '.portrait-studio/library.json'), 'utf8')); assert.equal(persisted.items.length, 0);
   assert.deepEqual(await fs.readFile(f.sourceImage), f.bytes);
 });
+
+test('batch delete IPC validates sender and payload, decorates snapshots, and holds the destination until the full batch finishes', async t => {
+  const f = await localFixture(t);
+  let state = (await f.invoke('library-list')).data;
+  for (const id of [101, 102, 103]) {
+    f.choices.push({ canceled: false, filePaths: [f.sourceImage] });
+    const picked = (await f.invoke('library-image-choose')).data;
+    const created = await f.invoke('library-create', { id, label: `batch fixture ${id}`, type: 'photo', prompts: { en: 'complete English', zh: '完整中文' }, expectedVersion: state.revision, imageToken: picked.token });
+    assert.equal(created.ok, true); state = created.data;
+  }
+  const request = { items: state.items.slice(0, 2).map(item => ({ id: item.id, expectedRevision: item.revision })), expectedVersion: state.revision, confirmed: true };
+  const handler = f.handlers.get('library-delete-batch');
+  const forged = { sender: f.event.sender, senderFrame: { url: f.event.senderFrame.url } };
+  assert.equal((await handler(forged, request)).error.code, 'FORBIDDEN');
+  assert.equal((await f.invoke('library-delete-batch', request, request)).error.code, 'INVALID_INPUT');
+  assert.equal((await f.invoke('library-delete-batch', { ...request, path: f.sourceImage })).error.code, 'INVALID_INPUT');
+  assert.equal((await f.invoke('library-delete-batch', { ...request, confirmed: false })).error.code, 'CONFIRMATION_REQUIRED');
+  assert.equal((await f.invoke('library-list')).data.items.length, 3);
+  let signalStarted, finishTrash, disposed = false, trashes = 0;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  f.setTrash(async filename => {
+    if (++trashes === 1) { signalStarted(); await new Promise(resolve => { finishTrash = resolve; }); }
+    await fs.unlink(filename);
+  });
+  const deleting = f.invoke('library-delete-batch', request); await started;
+  assert.equal((await f.invoke('library-choose')).error.code, 'BUSY');
+  const closing = f.adapter.dispose().then(() => { disposed = true; });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(disposed, false);
+  finishTrash(); const result = await deleting; await closing;
+  assert.equal(result.ok, true); assert.equal(trashes, 2); assert.equal(disposed, true);
+  assert.deepEqual(result.data.report, { deletedIds: [101, 102], remainingIds: [], errorCode: null });
+  assert.equal(result.data.snapshot.backend, 'local');
+  assert.deepEqual(result.data.snapshot.items.map(item => item.id), [103]);
+  assert.match(result.data.snapshot.items[0].image_url, /^portrait-media:\/\/asset\/103\?revision=1&library=\d+$/);
+  assert.deepEqual(await fs.readFile(f.sourceImage), f.bytes);
+});

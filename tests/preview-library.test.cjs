@@ -86,3 +86,25 @@ test('preview rejects symlink or replaced directories, corrupt bytes and malform
     assert.equal((await request(f.service, '/__preview/api/library')).json().error.code, 'CONFLICT');
   } finally { await fs.rm(f.temporary, { recursive: true }); }
 });
+
+test('preview session supports in-memory batch delete without touching disk', async () => {
+  const f = await fixture();
+  try {
+    const beforeIndex = await fs.readFile(f.indexFile);
+    const del = await request(f.service, '/__preview/api/portraits/1/delete', { method: 'POST' });
+    assert.equal(del.status, 200);
+    assert.equal(del.json().ok, true);
+    assert.equal(del.json().data.items.length, 0);
+    assert.equal(del.json().data.revision, 4);
+    const list = await request(f.service, '/__preview/api/library');
+    assert.equal(list.json().data.items.length, 0);
+    assert.equal(list.json().data.revision, 4);
+    assert.equal((await request(f.service, '/__preview/api/portraits/1')).status, 404);
+    const again = await request(f.service, '/__preview/api/portraits/1/delete', { method: 'POST' });
+    assert.equal(again.status, 200);
+    assert.equal(again.json().data.revision, 4);
+    assert.deepEqual(await fs.readFile(f.indexFile), beforeIndex);
+  } finally {
+    await fs.rm(f.temporary, { recursive: true });
+  }
+});

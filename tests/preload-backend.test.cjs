@@ -39,7 +39,9 @@ test('local mode keeps the fixed native library IPC surface', async () => {
   await api.libraryList();
   await api.chooseBatchDirectory();
   await api.commitBatch({ token: 'fixture', confirmed: true });
-  assert.deepEqual(calls, [['library-list'], ['library-batch-directory-choose'], ['library-batch-commit', { token: 'fixture', confirmed: true }]]);
+  const deletion = { items: [{ id: 1, expectedRevision: 2 }], expectedVersion: 3, confirmed: true };
+  await api.deletePortraits(deletion);
+  assert.deepEqual(calls, [['library-list'], ['library-batch-directory-choose'], ['library-batch-commit', { token: 'fixture', confirmed: true }], ['library-delete-batch', deletion]]);
   assert.equal(api.readFile, undefined);
   assert.equal(api.execute, undefined);
 });

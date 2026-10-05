@@ -109,11 +109,12 @@ async function createPreviewLibrary({ root = AUTHORIZED_ROOT, expectedRoot = AUT
   await checkRoot();
   // Startup validates the existing index without creating a folder or index.
   await loadIndex();
+  const deletedIds = new Set();
   async function middleware(request, response, next) {
     if (!allowedRequest(request)) return sendJSON(response, 403, errorResult({ code: 'FORBIDDEN' }));
     const raw = request.url || '/';
     if (!raw.startsWith(API)) return next();
-    if (request.method !== 'GET') return sendJSON(response, 405, errorResult({ code: 'FORBIDDEN' }));
+    if (request.method !== 'GET' && !(request.method === 'POST' && /^\/__preview\/api\/portraits\/[1-9]\d{0,5}\/delete$/.test(raw.split('?')[0]))) return sendJSON(response, 405, errorResult({ code: 'FORBIDDEN' }));
     try {
       // All supported API paths are literal ASCII. No encoded paths, dot
       // components, fragments, arbitrary file names or alternate URLs exist.
@@ -121,14 +122,22 @@ async function createPreviewLibrary({ root = AUTHORIZED_ROOT, expectedRoot = AUT
       const url = new URL(raw, PREVIEW_ORIGIN);
       if (url.origin !== PREVIEW_ORIGIN || url.pathname !== raw.split('?')[0]) fail('INVALID_INPUT');
       const index = await loadIndex();
+      if (request.method === 'POST') {
+        const del = /^\/__preview\/api\/portraits\/([1-9]\d{0,5})\/delete$/.exec(url.pathname);
+        if (!del || url.search) fail('INVALID_INPUT');
+        deletedIds.add(Number(del[1]));
+        const remaining = index.items.filter(candidate => !deletedIds.has(candidate.id));
+        return sendJSON(response, 200, { ok: true, data: { configured: true, root, writable: false, backend: 'local', remote: false,
+          revision: index.revision + deletedIds.size, items: remaining.map(publicItem) } });
+      }
       if (url.pathname === `${API}library` && !url.search) {
         return sendJSON(response, 200, { ok: true, data: { configured: true, root, writable: false, backend: 'local', remote: false,
-          revision: index.revision, items: index.items.map(publicItem) } });
+          revision: index.revision + deletedIds.size, items: index.items.filter(candidate => !deletedIds.has(candidate.id)).map(publicItem) } });
       }
       const match = /^\/__preview\/api\/(portraits|images)\/([1-9]\d{0,5})$/.exec(url.pathname);
       if (!match || !idPattern.test(match[2])) fail('INVALID_INPUT');
       const item = index.items.find(candidate => candidate.id === Number(match[2]));
-      if (!item) fail('NOT_FOUND');
+      if (!item || deletedIds.has(item.id)) fail('NOT_FOUND');
       if (match[1] === 'portraits') {
         if (url.search) fail('INVALID_INPUT');
         return sendJSON(response, 200, { ok: true, data: { revision: index.revision, item: publicItem(item) } });
@@ -155,7 +164,7 @@ function previewLibraryPlugin() {
       try { service = await createPreviewLibrary(); } catch (error) { startupError = error; }
       server.middlewares.use((request, response, next) => {
         if (!allowedRequest(request)) return sendJSON(response, 403, errorResult({ code: 'FORBIDDEN' }));
-        if (request.method !== 'GET') return sendJSON(response, 405, errorResult({ code: 'FORBIDDEN' }));
+        if (request.method !== 'GET' && !(request.method === 'POST' && /^\/__preview\/api\/portraits\/[1-9]\d{0,5}\/delete$/.test((request.url || '').split('?')[0]))) return sendJSON(response, 405, errorResult({ code: 'FORBIDDEN' }));
         if ((request.url || '').split('?')[0].startsWith('/__open-in-editor')) return sendJSON(response, 403, errorResult({ code: 'FORBIDDEN' }));
         if ((request.url || '').startsWith(API)) {
           if (startupError) return sendJSON(response, 503, errorResult(startupError));

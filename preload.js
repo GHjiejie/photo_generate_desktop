@@ -26,4 +26,5 @@ contextBridge.exposeInMainWorld('portraitStudio', {
   createPortrait: (value) => ipcRenderer.invoke('library-create', value),
   updatePortrait: (value) => ipcRenderer.invoke('library-update', value),
   deletePortrait: (value) => ipcRenderer.invoke('library-delete', value),
+  deletePortraits: (value) => ipcRenderer.invoke('library-delete-batch', value),
 });

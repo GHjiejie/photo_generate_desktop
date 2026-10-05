@@ -4,6 +4,8 @@ React 19 + Vite + Electron 本地桌面应用，当前源码版本 1.6.1。前�
 
 1.6.1 将当前已验证的本地功能重新打包，包括单目录批量导入和保存路径的重启恢复。打包应用始终使用本地后端，远程认证运行模块与真实图库不进入安装包；远程 Go 及认证源码仅保留为显式开发模式，服务器部署已取消。已封存的 1.0–1.6.0 软件与报告代表各自历史版本，字节保持不变。
 
+当前开发源码新增批量删除：点击图库工具栏或素材管理菜单的“批量删除”，通过图卡或复选框选择图片；支持全选／取消选择当前搜索结果、清空选择及 Escape 退出。跨搜索保留选择，并显示不在当前结果中的已选数量。确认后，桌面端逐张将图片移到 macOS 废纸篓，保留完整中英提示词和图片恢复副本。删除前核对整个选择的图库及图片版本；中途失败则停止，显示已完成数量并保留剩余选择，可重新确认重试。浏览器预览仍只在当前预览中隐藏图片，不修改本地素材。
+
 ## 运行与检查
 
 ```sh
@@ -11,11 +13,14 @@ npm ci
 npm start
 npm run check
 npm test
+npm run test:delete
 npm run test:server
 npm run test:remote
 ```
 
 `npm run test:electron`／`npm run test:batch` 使用隔离本地图库与 profile 验证桌面功能。可选 `npm run test:server` 使用本机 Go 运行临时存储测试。`npm run test:remote` 必须配置 `PORTRAIT_STUDIO_REMOTE_TEST_BASE_URL` 和 `PORTRAIT_STUDIO_REMOTE_TEST_LIBRARY_LABEL`，连接明确标记的空白临时测试服务；脚本拒绝默认真实素材库。默认本地运行不需要启动 Go 或任何服务器。
+
+`npm run test:delete` 使用临时图库与 profile 运行实际 Electron 页面、preload、批量删除 IPC 和恢复事务，验证筛选选择、取消、版本冲突、进行中的重复操作、中途失败、重试、双语主题及重新载入。仅将测试图片的废纸篓操作重定向到测试临时目录，不操作真实图库或系统废纸篓；报告与截图写入 `.verification/batch-delete-*`。
 
 `npm start` 先构建 React，再启动 Electron，默认读取 `/Users/jie/Github/photo_generate_desktop/photo_repo`。左下角设置显示本地保存路径，可通过原生选择器切换素材库；无需配置远程地址或平台账号。启动时先确定后端，preload 只接收本地主进程提供的固定模式标记；旧的远程地址、认证环境变量和连接配置不会自动启用远程模式。
 

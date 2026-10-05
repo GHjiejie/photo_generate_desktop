@@ -1,8 +1,8 @@
-// A development-only, read-only bridge. The desktop build keeps the Electron bridge.
+// A development-only preview bridge. The desktop build keeps the Electron bridge.
 if (import.meta.env.DEV && !window.portraitStudio) {
-  const request = async url => {
+  const request = async (url, method = 'GET') => {
     try {
-      const response = await fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
+      const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store' });
       return await response.json();
     } catch { return { ok: false, error: { code: 'UNAVAILABLE' } }; }
   };
@@ -12,6 +12,9 @@ if (import.meta.env.DEV && !window.portraitStudio) {
     libraryList: () => request('/__preview/api/library'),
     libraryGet: id => Number.isSafeInteger(id) && id >= 1 && id <= 999999
       ? request(`/__preview/api/portraits/${id}`)
+      : Promise.resolve({ ok: false, error: { code: 'INVALID_INPUT' } }),
+    deletePortrait: ({ id } = {}) => Number.isSafeInteger(id) && id >= 1 && id <= 999999
+      ? request(`/__preview/api/portraits/${id}/delete`, 'POST')
       : Promise.resolve({ ok: false, error: { code: 'INVALID_INPUT' } }),
     copyText: async text => {
       if (typeof text !== 'string' || text.length > 65536) return false;
