@@ -1,0 +1,13 @@
+.browse-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; }
+.gallery-sort { display: flex; align-items: center; gap: 8px; }
+.gallery-sort select { height: 30px; max-width: 170px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
+.gallery-sort select:disabled { cursor: default; opacity: .5; }
+.browse-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -3px 0 16px; }
+.browse-filter-chip { display: inline-flex; align-items: center; gap: 10px; max-width: min(360px, 100%); min-height: 29px; padding: 5px 9px; border: 1px solid var(--accent-border); border-radius: 7px; background: var(--accent-wash); color: var(--accent); cursor: pointer; font-size: 11px; }
+.browse-filter-chip > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browse-filter-chip > span:last-child { flex-shrink: 0; font-size: 15px; line-height: 1; }
+.browse-filter-chip:hover:not(:disabled) { border-color: var(--hover-border); }
+.browse-filters > .text-button { min-height: 29px; padding-inline: 5px; }
+.search-clear { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; }
+.search-clear:hover { background: var(--accent-wash); color: var(--text); }
+.search-box input::-webkit-search-cancel-button { -webkit-appearance: none; }

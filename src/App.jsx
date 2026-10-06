@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { portraitNumber, promptFor } from './portraits.js';
+import { portraitNumber, promptFor, labelFor } from './portraits.js';
 import { useI18n } from './i18n.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
@@ -15,6 +15,10 @@ import useTags from './useTags.js';
 import { tagKey, tagCatalog } from './tags.mjs';
 import { TagFilter } from './components/ImageTags.jsx';
 import CompareDialog, { CompareTray } from './components/Compare.jsx';
+import CreativeLab from './components/CreativeLab.jsx';
+import useCreativeDrafts from './useCreativeDrafts.js';
+import useGalleryView from './useGalleryView.js';
+import { MAX_DRAFT_LENGTH } from './creative-lab.mjs';
 import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
@@ -38,7 +42,7 @@ export default function App() {
   const [libraryError, setLibraryError] = useState('');
   const [pending, setPending] = useState(connected ? 'loading' : '');
   const [query, setQuery] = useState('');
-  const [dense, setDense] = useState(false);
+  const { dense, sort, setSort, toggleDensity, storageFailed: viewStorageFailed } = useGalleryView();
   const [selectedId, setSelectedId] = useState(null);
   const [detailItem, setDetailItem] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
@@ -51,6 +55,8 @@ export default function App() {
   const [processOpen, setProcessOpen] = useState(false);
   const [comparisonSelection, setComparisonSelection] = useState({ scope: null, ids: [] });
   const [comparisonItems, setComparisonItems] = useState(null);
+  const [creativeSession, setCreativeSession] = useState(null);
+  const creativeSequence = useRef(0);
   const searchRef = useRef(null);
   const timers = useRef({});
   const busyRef = useRef(connected);
@@ -62,6 +68,7 @@ export default function App() {
     ? JSON.stringify([remoteBackend ? 'remote' : 'local', remoteBackend ? connection.endpoint : '', library.root]) : null;
   const { favoriteIds, toggleFavorite, storageFailed } = useFavorites(favoriteScope, items);
   const { tagsById, setTags, storageFailed: tagsStorageFailed } = useTags(favoriteScope, items);
+  const { drafts: creativeDrafts, setDraft: setCreativeDraft, storageFailed: creativeStorageFailed } = useCreativeDrafts(favoriteScope);
   const catalog = useMemo(() => tagCatalog(items, tagsById), [items, tagsById]);
   const [tagFilter, setTagFilter] = useState({ scope: null, value: '' });
   const activeTag = tagFilter.scope === favoriteScope ? tagFilter.value : '';
@@ -72,11 +79,18 @@ export default function App() {
   const favoriteCount = items.filter(item => favoriteIds.has(item.id)).length;
   const visible = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return items.filter(item => (!favoritesOnly || favoriteIds.has(item.id)) && (!activeTag || (tagsById[item.id] ?? []).some(name => tagKey(name) === activeTag)) && (!term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn, ...(tagsById[item.id] ?? [])].filter(value => value != null).join(' ').toLowerCase().includes(term)));
-  }, [items, query, favoritesOnly, favoriteIds, activeTag, tagsById]);
+    const filtered = items.filter(item => (!favoritesOnly || favoriteIds.has(item.id)) && (!activeTag || (tagsById[item.id] ?? []).some(name => tagKey(name) === activeTag)) && (!term || [item.id, item.label, item.image, item.prompts?.en, item.prompts?.zh, item.sourceMetadata?.label_en, item.sourceMetadata?.label_cn, item.sourceMetadata?.style_tag_en, item.sourceMetadata?.style_tag_cn, ...(tagsById[item.id] ?? [])].filter(value => value != null).join(' ').toLowerCase().includes(term)));
+    if (sort === 'number-desc') filtered.sort((a, b) => b.id - a.id);
+    else if (sort === 'name-asc') {
+      const collator = new Intl.Collator(language === 'zh' ? 'zh-CN' : 'en', { numeric: true, sensitivity: 'base' });
+      filtered.sort((a, b) => collator.compare(labelFor(a, language), labelFor(b, language)) || a.id - b.id);
+    }
+    return filtered;
+  }, [items, query, favoritesOnly, favoriteIds, activeTag, tagsById, sort, language]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen || comparisonItems);
+  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen || comparisonItems || creativeSession);
   const canCompare = connected && library.configured && !libraryError;
+  const canCreateDraft = connected && library.configured && Boolean(favoriteScope) && !libraryError;
   const canManage = desktop && library.configured && library.writable && !libraryError && (!remoteBackend || connection.status === 'connected' && platformSessionActive(connection.authentication));
   const canBatchDelete = browserPreview
     ? library.configured && !libraryError && typeof bridge?.deletePortrait === 'function'
@@ -90,14 +104,17 @@ export default function App() {
     }
     setToast(message);
     clearTimeout(timers.current.toast);
-    timers.current.toast = setTimeout(() => setToast(''), ['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly'].includes(message?.key) ? 6500 : 2600);
+    timers.current.toast = setTimeout(() => setToast(''), ['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly', 'lab.sessionOnly', 'browse.sessionOnly'].includes(message?.key) ? 6500 : 2600);
   }, [remoteBackend]);
   useEffect(() => { if (storageFailed) showToast({ key: 'favorites.sessionOnly' }); }, [storageFailed, showToast]);
   useEffect(() => { if (tagsStorageFailed) showToast({ key: 'tags.sessionOnly' }); }, [tagsStorageFailed, showToast]);
+  useEffect(() => { if (creativeStorageFailed) showToast({ key: 'lab.sessionOnly' }); }, [creativeStorageFailed, showToast]);
+  useEffect(() => { if (viewStorageFailed) showToast({ key: 'browse.sessionOnly' }); }, [viewStorageFailed, showToast]);
   useEffect(() => {
     lastRandomId.current = null;
     setFavoriteView({ scope: favoriteScope, only: false }); setTagFilter({ scope: favoriteScope, value: '' });
     setComparisonSelection({ scope: favoriteScope, ids: [] }); setComparisonItems(null);
+    setCreativeSession(null);
   }, [favoriteScope, library.root]);
   const applySnapshot = useCallback(snapshot => {
     if (remoteBackend && snapshot.authentication && !platformSessionActive(snapshot.authentication)) {
@@ -263,11 +280,11 @@ export default function App() {
     const onKey = event => {
       if (event.defaultPrevented) return;
       if (!managing && !pending && selectionMode && event.key === 'Escape') { setSelectionMode(false); setSelectedIds(new Set()); }
-      if (!managing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); }
+      if (!managing && !selectedId && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchRef.current?.focus(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [managing, pending, selectionMode]);
+  }, [managing, pending, selectionMode, selectedId]);
   async function copyPrompt(item, fromCard = false) {
     if (!item) return;
     try {
@@ -353,6 +370,58 @@ export default function App() {
         closeDetail(); setComparisonItems(current);
       } catch (error) { showToast(error); }
     });
+  }
+  async function readCreativeSources(ids) {
+    const snapshot = await readSnapshot();
+    const available = new Set(snapshot.items.map(item => item.id));
+    if (ids.some(id => !available.has(id))) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+    const sources = [];
+    for (const id of ids) sources.push(unwrap(await bridge.libraryGet(id)).item);
+    return sources;
+  }
+  async function openCreativeLab(seedIds) {
+    if (!canCreateDraft || busyRef.current || selectionMode || editor || deleteTarget || batchOpen || processOpen || connectionOpen || creativeSession) return;
+    let ids;
+    if (Array.isArray(seedIds)) ids = [...new Set(seedIds)].slice(0, 4);
+    else if (comparisonCandidates.length) ids = comparisonCandidates.map(item => item.id);
+    else {
+      const pool = [...visible]; ids = [];
+      while (pool.length && ids.length < 3) ids.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0].id);
+    }
+    await exclusive('creative', async () => {
+      try {
+        const sources = await readCreativeSources(ids);
+        closeDetail(); setComparisonItems(null);
+        setCreativeSession({ id: ++creativeSequence.current, scope: favoriteScope, sources });
+      } catch (error) { showToast(error); }
+    });
+  }
+  async function changeCreativeSources(ids) {
+    if (!creativeSession || !canCreateDraft || busyRef.current || !Array.isArray(ids)) return;
+    const unique = [...new Set(ids)];
+    if (unique.length > 4) { showToast({ key: 'lab.sourceLimit' }); return; }
+    if (unique.some(id => !Number.isInteger(id))) return;
+    const sessionId = creativeSession.id;
+    await exclusive('creative-source', async () => {
+      try {
+        const sources = await readCreativeSources(unique);
+        setCreativeSession(previous => previous?.id === sessionId ? { ...previous, sources } : previous);
+      } catch (error) { showToast(error); }
+    });
+  }
+  function updateCreativeDraft(draftLanguage, text) {
+    if (!creativeSession || !canCreateDraft || busyRef.current) return { error: 'lab.unavailable' };
+    return setCreativeDraft(draftLanguage, text);
+  }
+  async function copyCreativeDraft(text) {
+    if (!creativeSession || busyRef.current || typeof text !== 'string' || !text.trim()) return false;
+    if (text.length > MAX_DRAFT_LENGTH) { showToast({ key: 'lab.tooLong', params: { max: MAX_DRAFT_LENGTH } }); return false; }
+    try {
+      const copied = typeof bridge?.copyText === 'function' ? await bridge.copyText(text) : false;
+      if (!copied) throw new Error('COPY_FAILED');
+      showToast({ key: 'lab.copied' });
+      return true;
+    } catch { showToast({ key: 'lab.copyFailed' }); return false; }
   }
   function beginCreate() {
     if (!canManage || busyRef.current) return;
@@ -538,9 +607,10 @@ export default function App() {
   return <RemoteConnectionContext.Provider value={{ backend: remoteBackend ? 'remote' : 'local', root: library.root, configured: library.configured, allowed: (remoteBackend ? connectionSupported : desktop && typeof bridge?.chooseLibrary === 'function') && !pending && !managing, onOpen: remoteBackend ? openConnectionSettings : configureLibrary, onAuthenticationError: error => { if (remoteBackend && isAuthenticationError(error)) showToast(error); } }}>
     <div className="app-shell"><Sidebar portraits={items} favoriteCount={favoriteCount} favoritesOnly={favoritesOnly} onFavoriteView={changeFavoriteView} favoritesAvailable={Boolean(favoriteScope)} pending={Boolean(pending) || managing} />
       <main className={`main-content${comparisonCandidates.length ? ' has-comparison' : ''}`}>
-        <Header query={query} onQuery={setQuery} searchRef={searchRef} dense={dense} onToggleDensity={() => setDense(value => !value)}
+        <Header query={query} onQuery={setQuery} searchRef={searchRef} batchMode={selectionMode} dense={dense} onToggleDensity={toggleDensity}
           onRandom={openRandom} randomDisabled={Boolean(pending) || managing || selectionMode || !visible.length}
           onCompare={openComparison} compareCount={comparisonCandidates.length} compareDisabled={!canCompare || comparisonCandidates.length < 2 || Boolean(pending) || managing || selectionMode}
+          onCreativeLab={() => openCreativeLab()} creativeDisabled={!canCreateDraft || Boolean(pending) || managing || selectionMode}
           library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing}
           onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate}
           onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }}
@@ -549,6 +619,10 @@ export default function App() {
         {notice && <div id="libraryNotice" className={`library-notice${libraryError ? ' error' : ''}`} role={libraryError ? 'alert' : 'status'}>{notice}</div>}
         <TagFilter catalog={catalog} value={activeTag} onChange={changeTagFilter} disabled={Boolean(pending) || managing} />
         <Gallery items={visible} dense={dense} copiedId={copiedId} onOpen={openDetail} onCopy={copyPrompt} configured={library.configured} query={query}
+          sort={sort} onSort={value => { if (!busyRef.current && !managing) setSort(value); }}
+          activeTagName={catalog.find(tag => tag.key === activeTag)?.name ?? activeTag}
+          onClearQuery={() => setQuery('')} onClearTag={() => changeTagFilter('')}
+          onClearFavorites={() => changeFavoriteView(false)}
           favoriteIds={favoriteIds} favoritesOnly={favoritesOnly} favoritesAvailable={Boolean(favoriteScope) && !libraryError} onToggleFavorite={toggleItemFavorite} onShowAll={() => changeFavoriteView(false)}
           tagFiltered={Boolean(activeTag)} onResetFilters={resetFilters} comparisonIds={comparisonIds} canCompare={canCompare} onToggleCompare={toggleComparison}
           selectedIds={selectedIds} onToggleSelect={toggleSelect} onBatchDelete={beginBatchDelete} batchMode={selectionMode} canBatchDelete={canBatchDelete}
@@ -557,14 +631,18 @@ export default function App() {
       </main>
     </div>
     <CompareTray items={comparisonCandidates} disabled={Boolean(pending) || managing || selectionMode} onRemove={toggleComparison} onClear={clearComparison} onOpen={openComparison} />
-    <Toast message={toastText} error={['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly'].includes(toast?.key)} />
-    <DetailDialog item={selected} total={items.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle}
+    <Toast message={toastText} error={['app.batchDeletePartial', 'favorites.sessionOnly', 'tags.sessionOnly', 'lab.sessionOnly', 'lab.copyFailed', 'lab.tooLong', 'browse.sessionOnly'].includes(toast?.key)} />
+    <DetailDialog item={selected} position={selected ? visible.findIndex(item => item.id === selected.id) + 1 : 0} total={visible.length} language={language} onClose={closeDetail} onCopy={copyPrompt} onOpenImage={openImage} onCycle={cycle}
       canManage={canManage} pending={Boolean(pending) || managing} onEdit={beginEdit} onDelete={beginDelete}
       favorite={Boolean(selected && favoriteIds.has(selected.id))} favoritesAvailable={Boolean(favoriteScope) && !libraryError} onToggleFavorite={toggleItemFavorite}
       onRandom={openRandom} randomDisabled={Boolean(pending) || managing || selectionMode || !visible.length}
       tags={selected ? tagsById[selected.id] ?? [] : []} catalog={catalog} onTagsChange={saveItemTags}
-      comparing={Boolean(selected && comparisonIds.includes(selected.id))} canCompare={canCompare} onToggleCompare={toggleComparison} />
-    <CompareDialog items={comparisonItems} language={language} onClose={() => setComparisonItems(null)} onCopy={copyPrompt} onOpenImage={openImage} />
+      comparing={Boolean(selected && comparisonIds.includes(selected.id))} canCompare={canCompare} onToggleCompare={toggleComparison}
+      onCreativeLab={item => openCreativeLab([item.id])} creativeDisabled={!canCreateDraft || Boolean(pending) || managing || selectionMode} />
+    <CompareDialog items={comparisonItems} language={language} pending={Boolean(pending)} onClose={() => { if (!busyRef.current) setComparisonItems(null); }} onCopy={copyPrompt} onOpenImage={openImage}
+      onCreativeLab={() => openCreativeLab(comparisonItems.map(item => item.id))} />
+    <CreativeLab session={creativeSession} items={items} language={language} drafts={creativeDrafts} storageFailed={creativeStorageFailed} onDraftChange={updateCreativeDraft}
+      onSourceIdsChange={changeCreativeSources} pending={Boolean(pending)} onClose={() => { if (!busyRef.current) setCreativeSession(null); }} onCopy={copyCreativeDraft} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
     <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />

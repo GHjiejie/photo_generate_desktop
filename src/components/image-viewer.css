@@ -1,0 +1,41 @@
+.detail-image-wrap > #detailImage { object-fit: contain; }
+.detail-image-actions { flex-wrap: wrap; max-width: calc(100% - 36px); }
+.detail-image-wrap .detail-index { bottom: 82px; letter-spacing: .1em; }
+.detail-browse { position: absolute; inset: auto 16px 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(12,13,17,.82); color: #fff; backdrop-filter: blur(10px); }
+.detail-browse button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 32px; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 7px; background: rgba(255,255,255,.1); color: inherit; cursor: pointer; font: inherit; font-size: 11px; }
+.detail-browse button:hover:not(:disabled) { background: rgba(255,255,255,.2); }
+.detail-browse button:disabled { opacity: .35; cursor: default; }
+.detail-position { flex: 1 1 50px; text-align: center; font-size: 11px; line-height: 1.5; }
+.detail-browse button:focus-visible, .viewer-button:focus-visible { outline: 2px solid var(--accent, #cbbdff); outline-offset: 3px; }
+.image-viewer { width: min(1400px, calc(100vw - 32px)); height: calc(100dvh - 32px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--dialog-border, #3a3b46); border-radius: 16px; background: var(--panel, #17181d); color: var(--text, #f4f4f7); box-shadow: var(--dialog-shadow, 0 30px 120px rgba(0,0,0,.55)); overflow: hidden; }
+.image-viewer[open] { display: flex; flex-direction: column; }
+.image-viewer::backdrop { background: rgba(7,8,10,.88); backdrop-filter: blur(7px); }
+.image-viewer-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px 8px; flex-shrink: 0; }
+.image-viewer-header h2 { min-width: 0; margin: 0; font-size: 14px; font-weight: 500; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.viewer-button { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 6px 12px; border: 1px solid var(--dialog-border, #3a3b46); border-radius: 8px; background: var(--panel, #17181d); color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.viewer-button:hover:not(:disabled) { background: var(--surface-hover, rgba(127,127,127,.14)); }
+.viewer-button:disabled { opacity: .4; cursor: default; }
+.viewer-close { flex-shrink: 0; width: 34px; padding: 0; border-color: transparent; font-size: 26px; line-height: 1; }
+.image-viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 20px; padding: 0 16px 12px; flex-shrink: 0; }
+.viewer-zoom-controls, .viewer-size-controls { display: flex; align-items: center; gap: 8px; }
+.viewer-zoom-button { width: 36px; padding: 0; font-size: 21px; }
+.viewer-scale { min-width: 58px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.image-viewer-viewport { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--bg, #101114); touch-action: none; outline-offset: -3px; }
+.image-viewer-viewport.can-pan { cursor: grab; }
+.image-viewer-viewport.is-dragging { cursor: grabbing; }
+.image-viewer-image { position: absolute; top: 50%; left: 50%; display: block; max-width: none; max-height: none; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.image-viewer-image[hidden] { display: none; }
+.viewer-status { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--muted, #b9bac8); font-size: 13px; }
+.viewer-status p { margin: 0; }
+.image-viewer-hint { flex-shrink: 0; margin: 0; padding: 12px 16px; color: var(--muted, #b9bac8); text-align: center; font-size: 11px; line-height: 1.5; }
+@media (max-width: 640px) {
+  .detail-browse { inset-inline: 8px; gap: 6px; padding: 6px; }
+  .detail-browse-label { display: none; }
+  .detail-position { flex-basis: 45px; }
+  .image-viewer { width: calc(100vw - 16px); height: calc(100dvh - 16px); border-radius: 12px; }
+  .image-viewer-header { padding-inline: 12px; }
+  .image-viewer-toolbar { gap: 8px 12px; padding-inline: 10px; }
+  .viewer-size-controls { gap: 6px; }
+  .viewer-size-controls .viewer-button { padding-inline: 8px; }
+  .image-viewer-hint { padding: 8px 12px; }
+}

@@ -17,8 +17,10 @@
     "test:delete": "npm run build && node scripts/verify-batch-delete.cjs",
     "test:inspiration": "npm run build && node scripts/verify-inspiration.cjs",
     "test:organize": "npm run build && node scripts/verify-organize.cjs",
+    "test:creative": "npm run build && node scripts/verify-creative.cjs",
     "test:server": "cd server && go test ./...",
-    "test:remote": "npm run build && node scripts/verify-remote-native.cjs"
+    "test:remote": "npm run build && node scripts/verify-remote-native.cjs",
+    "test:browse": "npm run build && node scripts/verify-browse.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

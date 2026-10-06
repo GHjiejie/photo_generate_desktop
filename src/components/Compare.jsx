@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { labelFor, promptFor } from '../portraits.js';
 import { useI18n } from '../i18n.jsx';
+import { CreativeLabIcon } from './CreativeLab.jsx';
 
 export function CompareIcon() {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="7" height="16" rx="1.5" /><rect x="14" y="4" width="7" height="16" rx="1.5" /></svg>;
@@ -23,7 +24,7 @@ export function CompareTray({ items, disabled, onRemove, onClear, onOpen }) {
   </aside>;
 }
 
-export default function CompareDialog({ items, language, onClose, onCopy, onOpenImage }) {
+export default function CompareDialog({ items, language, pending, onClose, onCopy, onOpenImage, onCreativeLab }) {
   const { t, uiLanguage } = useI18n();
   const dialogRef = useRef(null);
   useEffect(() => {
@@ -31,14 +32,14 @@ export default function CompareDialog({ items, language, onClose, onCopy, onOpen
     if (items && !dialog.open) dialog.showModal();
     else if (!items && dialog.open) dialog.close();
   }, [items]);
-  return <dialog id="compareDialog" ref={dialogRef} className="compare-dialog" aria-labelledby="compareTitle" onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="compare-dialog-heading"><div><h2 id="compareTitle">{t('compare.title')}</h2><p>{t('compare.description')}</p></div><button id="closeComparison" className="dialog-close" type="button" aria-label={t('common.close')} onClick={onClose}>×</button></div>
+  return <dialog id="compareDialog" ref={dialogRef} className="compare-dialog" aria-labelledby="compareTitle" onCancel={event => { event.preventDefault(); if (!pending) onClose(); }} onClick={event => { if (event.target === event.currentTarget && !pending) onClose(); }}>
+    <div className="compare-dialog-heading"><div><h2 id="compareTitle">{t('compare.title')}</h2><p>{t('compare.description')}</p></div><div className="compare-creative-actions"><button id="compareCreativeLab" className="secondary-button" type="button" disabled={pending} onClick={onCreativeLab}><CreativeLabIcon /><span>{t('lab.remixComparison')}</span></button><button id="closeComparison" className="dialog-close" type="button" disabled={pending} aria-label={t('common.close')} onClick={onClose}>×</button></div></div>
     <div className="compare-columns" data-count={items?.length ?? 0}>
       {(items ?? []).map(item => <section key={item.id} className="compare-column" data-id={item.id} aria-label={labelFor(item, uiLanguage)}>
         <div className="compare-image"><img src={item.image_url} alt={labelFor(item, uiLanguage)} /></div>
-        <div className="compare-column-heading"><h3>{labelFor(item, uiLanguage)}</h3><button className="text-button" type="button" onClick={() => onOpenImage(item)}>{t('detail.openImage')}</button></div>
+        <div className="compare-column-heading"><h3>{labelFor(item, uiLanguage)}</h3><button className="text-button" type="button" disabled={pending} onClick={() => onOpenImage(item)}>{t('detail.openImage')}</button></div>
         <div className="prompt-box"><pre lang={language === 'zh' ? 'zh-CN' : 'en'}>{promptFor(item, language)}</pre></div>
-        <button className="compare-copy secondary-button" type="button" onClick={() => onCopy(item)}>{t('detail.copy')}</button>
+        <button className="compare-copy secondary-button" type="button" disabled={pending} onClick={() => onCopy(item)}>{t('detail.copy')}</button>
       </section>)}
     </div>
   </dialog>;
