@@ -21,6 +21,7 @@ import usePromptPlans from './usePromptPlans.js';
 import useGalleryView from './useGalleryView.js';
 import { MAX_DRAFT_LENGTH } from './creative-lab.mjs';
 import Playground from './components/Playground.jsx';
+import useMemoryRecords from './useMemoryRecords.js';
 import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
@@ -77,6 +78,7 @@ export default function App() {
   const { tagsById, setTags, storageFailed: tagsStorageFailed } = useTags(favoriteScope, items);
   const { drafts: creativeDrafts, setDraft: setCreativeDraft, setDrafts: setCreativeDrafts, storageFailed: creativeStorageFailed } = useCreativeDrafts(favoriteScope);
   const { plans, savePlan, renamePlan, removePlan, storageFailed: plansStorageFailed } = usePromptPlans(favoriteScope);
+  const { records: memoryRecords, storageFailed: memoryStorageFailed, recordWin: recordMemoryWin } = useMemoryRecords(favoriteScope);
   const catalog = useMemo(() => tagCatalog(items, tagsById), [items, tagsById]);
   const [tagFilter, setTagFilter] = useState({ scope: null, value: '' });
   const activeTag = tagFilter.scope === favoriteScope ? tagFilter.value : '';
@@ -407,6 +409,10 @@ export default function App() {
     if (!playSession || playSession.scope !== favoriteScope || busyRef.current || libraryError || !playSession.items.some(item => item.id === id)) return;
     setPlayFeedback(null);
     toggleFavorite(id);
+  }
+  function saveMemoryWin(pairCount, turns) {
+    if (!playSession || playSession.scope !== favoriteScope || busyRef.current || libraryError || pairCount > new Set(playSession.items.map(item => item.id)).size) return { ok: false, error: 'memory.recordsUnavailable' };
+    return recordMemoryWin(pairCount, turns);
   }
   async function openPlaygroundDetail(item) {
     if (!playSession || playSession.scope !== favoriteScope || busyRef.current || !playSession.items.some(candidate => candidate.id === item?.id)) return;
@@ -739,6 +745,7 @@ export default function App() {
       plans={plans} plansStorageFailed={plansStorageFailed} onSavePlan={saveCreativePlan} onRenamePlan={renameCreativePlan} onRemovePlan={removeCreativePlan} onRestorePlan={restoreCreativePlan}
       onSourceIdsChange={changeCreativeSources} pending={Boolean(pending)} onClose={() => { if (!busyRef.current) setCreativeSession(null); }} onCopy={copyCreativeDraft} />
     <Playground session={playSession} language={language} favoriteIds={favoriteIds} pending={Boolean(pending)}
+      memoryRecords={memoryRecords} memoryStorageFailed={memoryStorageFailed} onRecordMemoryWin={saveMemoryWin}
       feedback={playgroundFeedback ? { error: playgroundFeedback.error, text: describeError(playgroundFeedback.value) } : null}
       onClose={() => { if (!busyRef.current) { setPlaySession(null); setPlayFeedback(null); } }} onToggleFavorite={togglePlaygroundFavorite}
       onOpenDetail={openPlaygroundDetail} onCreativeLab={remixPlaygroundItem} onCopy={copyPlaygroundPrompt} onRetryImage={refreshPlaygroundImage} />
