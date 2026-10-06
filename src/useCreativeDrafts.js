@@ -35,6 +35,15 @@ export default function useCreativeDrafts(scope) {
     setCollection(next);
     return { text };
   }
-  return { drafts: collection.scope === scope ? collection.drafts : emptyDrafts, setDraft,
+  function setDrafts(drafts) {
+    if (!scope) return { error: 'lab.unavailable' };
+    if (!drafts || ['zh', 'en'].some(language => typeof drafts[language] !== 'string')) return { error: 'lab.invalidDraft' };
+    if (['zh', 'en'].some(language => drafts[language].length > MAX_DRAFT_LENGTH)) return { error: 'lab.tooLong' };
+    const next = { scope, drafts: { zh: drafts.zh, en: drafts.en }, changed: true };
+    current.current = next;
+    setCollection(next);
+    return { drafts: next.drafts };
+  }
+  return { drafts: collection.scope === scope ? collection.drafts : emptyDrafts, setDraft, setDrafts,
     storageFailed: storageState.scope === scope && storageState.failed };
 }

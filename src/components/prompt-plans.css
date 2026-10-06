@@ -1,0 +1,66 @@
+.prompt-plans { display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--text); }
+.plans-heading { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.plans-heading > div { min-width: 0; }
+.plans-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 15px; }
+.plans-heading h3 svg { color: var(--accent); }
+.plans-heading p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.plans-heading > button { flex-shrink: 0; height: 31px; padding-inline: 10px; font-size: 10px; }
+.plans-save, .plans-rename { display: flex; gap: 7px; flex-shrink: 0; }
+.prompt-plans input { min-width: 0; height: 33px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--field-bg); color: var(--text); font: inherit; font-size: 11px; }
+.prompt-plans input::placeholder { color: var(--faint); }
+.prompt-plans input:disabled { opacity: .45; }
+.plans-save > input, .plans-rename > input { flex: 1; }
+.plans-save > button, .plans-rename > button { flex-shrink: 0; height: 33px; padding-inline: 10px; font-size: 11px; }
+.plans-draft-hint { flex-shrink: 0; margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.plans-storage-warning, .plans-feedback { flex-shrink: 0; margin: 8px 0 0; padding: 7px 9px; border: 1px solid var(--success-border); border-radius: 7px; background: var(--success-bg); color: var(--success-text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.plans-feedback.error, .plans-storage-warning { border-color: var(--error-border); background: var(--error-bg); color: var(--error-text); }
+.plans-search { display: flex; flex-shrink: 0; align-items: center; gap: 9px; margin: 12px 0 11px; }
+.plans-search input { flex: 1; height: 30px; }
+.plans-search > span { flex-shrink: 0; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.plans-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 18px; flex: 1; min-width: 0; min-height: 0; }
+.plans-list { display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 0; overflow: auto; padding: 2px 4px 3px 2px; overscroll-behavior: contain; }
+.plans-item { display: flex; flex-shrink: 0; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; width: 100%; padding: 11px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); color: var(--text); text-align: left; cursor: pointer; }
+.plans-item:hover:not(:disabled), .plans-item.selected { border-color: var(--accent-border); background: var(--accent-wash); }
+.plans-item.selected strong { color: var(--accent); }
+.plans-item strong { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.5; font-weight: 600; }
+.plans-item > span { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.plans-item > small { color: var(--faint); font-size: 9px; line-height: 1.5; }
+.plans-list-empty { margin: 10px 3px; color: var(--muted); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.plans-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.plans-detail-heading { display: flex; flex-shrink: 0; flex-direction: column; gap: 5px; margin: 0 0 10px; }
+.plans-detail-heading h4 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.plans-detail-heading > span { color: var(--faint); font-size: 9px; }
+.plans-rename input { height: 29px; font-size: 10px; }
+.plans-rename button { height: 29px; padding-inline: 8px; font-size: 10px; }
+.plans-prompt-heading { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; margin: 11px 0 8px; }
+.plans-prompt-heading > span { color: var(--muted); font-size: 10px; }
+.plans-prompt-heading > button { color: var(--accent); font-size: 10px; }
+.plans-prompt { flex: 1; min-width: 0; min-height: 95px; width: 100%; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--field-bg); color: var(--prompt-text); font: inherit; font-size: 12px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; overscroll-behavior: contain; }
+.plans-prompt.empty { color: var(--faint); }
+.plans-prompt:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.plans-diff { padding: 10px 8px; }
+.plans-diff-summary { display: flex; flex-shrink: 0; flex-direction: column; gap: 4px; margin-bottom: 7px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.plans-diff-summary strong { color: var(--text); font-weight: 500; }
+.plans-diff-equal { margin: 0 0 8px; color: var(--muted); font-size: 10px; }
+.plans-diff-line { display: flex; align-items: baseline; min-height: 1.75em; }
+.plans-diff-symbol { flex: 0 0 16px; width: 16px; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.plans-diff-line > [data-plan-diff] { flex: 1; min-width: 0; }
+.plans-diff-line.added { background: var(--success-bg); color: var(--success-text); }
+.plans-diff-line.removed { background: var(--error-bg); color: var(--error-text); }
+.plans-actions { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 7px; margin-top: 11px; }
+.plans-actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.plans-actions button { height: 32px; padding-inline: 9px; font-size: 10px; }
+.plans-actions .plans-delete-link { padding-inline: 0; color: var(--danger-text); }
+.plans-delete-link:hover:not(:disabled) { color: var(--danger-text-hover); }
+.plans-delete-confirm { flex-shrink: 0; margin-top: 10px; padding: 9px; border: 1px solid var(--error-border); border-radius: 8px; background: var(--error-bg); }
+.plans-delete-confirm p { margin: 0 0 9px; color: var(--error-text); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.plans-delete-confirm > div { display: flex; justify-content: flex-end; gap: 7px; }
+.plans-delete-confirm button { height: 29px; padding-inline: 9px; font-size: 10px; }
+.plans-danger { border: 1px solid var(--danger-border); border-radius: 7px; background: var(--danger-bg); color: var(--danger-button-text); cursor: pointer; }
+.plans-danger:hover:not(:disabled) { background: var(--danger-bg-hover); }
+.plans-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; min-width: 0; min-height: 0; padding: 20px 14px; border: 1px dashed var(--line); border-radius: 10px; text-align: center; }
+.plans-detail-empty > svg { width: 28px; height: 28px; color: var(--accent); }
+.plans-detail-empty > strong { font-size: 12px; font-weight: 500; }
+.plans-detail-empty > p { max-width: 245px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
+@media (max-width: 1150px) { .plans-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 14px; } .plans-heading { gap: 8px; } .plans-heading > button { padding-inline: 8px; } }
+@media (max-height: 760px) { .plans-heading { margin-bottom: 9px; } .plans-search { margin-block: 9px; } .plans-item { padding: 9px 8px; gap: 4px; } .plans-detail-heading { margin-bottom: 7px; } .plans-prompt-heading { margin-top: 9px; } }

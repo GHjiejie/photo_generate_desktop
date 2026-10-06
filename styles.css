@@ -631,3 +631,7 @@ html[data-theme="light"] .copy-button:hover { color: #fff; }
 .compare-creative-actions { display: flex; align-items: flex-start; flex-shrink: 0; margin-right: 24px; }
 .compare-creative-actions > .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; height: 34px; padding-inline: 11px; font-size: 11px; }
 .creative-lab-trigger { display: grid; place-items: center; color: var(--accent); }
+.creative-lab-layout.plans-mode { grid-template-columns: minmax(0, 1fr); }
+.lab-open-plans { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+.lab-draft-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lab-draft-label > span { color: var(--faint); font-size: 10px; }

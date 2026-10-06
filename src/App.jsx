@@ -17,8 +17,10 @@ import { TagFilter } from './components/ImageTags.jsx';
 import CompareDialog, { CompareTray } from './components/Compare.jsx';
 import CreativeLab from './components/CreativeLab.jsx';
 import useCreativeDrafts from './useCreativeDrafts.js';
+import usePromptPlans from './usePromptPlans.js';
 import useGalleryView from './useGalleryView.js';
 import { MAX_DRAFT_LENGTH } from './creative-lab.mjs';
+import Playground from './components/Playground.jsx';
 import RemoteConnectionDialog, { RemoteConnectionContext, recommendedEndpoint, connectionStatusForError, isConnectionError, isAuthenticationError, platformSessionActive } from './components/RemoteConnectionDialog.jsx';
 
 const initialLibrary = { configured: false, root: '', writable: false, revision: null, items: [] };
@@ -56,6 +58,11 @@ export default function App() {
   const [comparisonSelection, setComparisonSelection] = useState({ scope: null, ids: [] });
   const [comparisonItems, setComparisonItems] = useState(null);
   const [creativeSession, setCreativeSession] = useState(null);
+  const [playSession, setPlaySession] = useState(null);
+  const [playFeedback, setPlayFeedback] = useState(null);
+  const playSessionRef = useRef(null);
+  playSessionRef.current = playSession;
+  const playSequence = useRef(0);
   const creativeSequence = useRef(0);
   const searchRef = useRef(null);
   const timers = useRef({});
@@ -68,7 +75,8 @@ export default function App() {
     ? JSON.stringify([remoteBackend ? 'remote' : 'local', remoteBackend ? connection.endpoint : '', library.root]) : null;
   const { favoriteIds, toggleFavorite, storageFailed } = useFavorites(favoriteScope, items);
   const { tagsById, setTags, storageFailed: tagsStorageFailed } = useTags(favoriteScope, items);
-  const { drafts: creativeDrafts, setDraft: setCreativeDraft, storageFailed: creativeStorageFailed } = useCreativeDrafts(favoriteScope);
+  const { drafts: creativeDrafts, setDraft: setCreativeDraft, setDrafts: setCreativeDrafts, storageFailed: creativeStorageFailed } = useCreativeDrafts(favoriteScope);
+  const { plans, savePlan, renamePlan, removePlan, storageFailed: plansStorageFailed } = usePromptPlans(favoriteScope);
   const catalog = useMemo(() => tagCatalog(items, tagsById), [items, tagsById]);
   const [tagFilter, setTagFilter] = useState({ scope: null, value: '' });
   const activeTag = tagFilter.scope === favoriteScope ? tagFilter.value : '';
@@ -88,7 +96,7 @@ export default function App() {
     return filtered;
   }, [items, query, favoritesOnly, favoriteIds, activeTag, tagsById, sort, language]);
   const selected = detailItem?.id === selectedId ? detailItem : null;
-  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen || comparisonItems || creativeSession);
+  const managing = Boolean(editor || deleteTarget || batchOpen || processOpen || connectionOpen || comparisonItems || creativeSession || playSession);
   const canCompare = connected && library.configured && !libraryError;
   const canCreateDraft = connected && library.configured && Boolean(favoriteScope) && !libraryError;
   const canManage = desktop && library.configured && library.writable && !libraryError && (!remoteBackend || connection.status === 'connected' && platformSessionActive(connection.authentication));
@@ -114,7 +122,7 @@ export default function App() {
     lastRandomId.current = null;
     setFavoriteView({ scope: favoriteScope, only: false }); setTagFilter({ scope: favoriteScope, value: '' });
     setComparisonSelection({ scope: favoriteScope, ids: [] }); setComparisonItems(null);
-    setCreativeSession(null);
+    setCreativeSession(null); setPlaySession(null); setPlayFeedback(null);
   }, [favoriteScope, library.root]);
   const applySnapshot = useCallback(snapshot => {
     if (remoteBackend && snapshot.authentication && !platformSessionActive(snapshot.authentication)) {
@@ -286,7 +294,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [managing, pending, selectionMode, selectedId]);
   async function copyPrompt(item, fromCard = false) {
-    if (!item) return;
+    if (!item) return false;
     try {
       if (desktop) {
         if (typeof bridge.copyPrompt !== 'function' || !await bridge.copyPrompt({ id: item.id, revision: item.revision, language })) throw new Error('COPY_FAILED');
@@ -301,7 +309,8 @@ export default function App() {
         timers.current.copy = setTimeout(() => setCopiedId(null), 1500);
       }
       showToast({ key: 'app.promptCopied', params: { number: portraitNumber(item), languageKey: language === 'zh' ? 'app.chinese' : 'app.english' } });
-    } catch { if (!await updateAuthenticationAfterBooleanFailure()) showToast({ key: 'app.copyFailed' }); }
+      return true;
+    } catch { if (!await updateAuthenticationAfterBooleanFailure()) showToast({ key: 'app.copyFailed' }); return false; }
   }
   async function openImage(item) {
     if (!item) return;
@@ -379,6 +388,61 @@ export default function App() {
     for (const id of ids) sources.push(unwrap(await bridge.libraryGet(id)).item);
     return sources;
   }
+  async function openPlayground() {
+    if (!canCreateDraft || busyRef.current || managing || selectionMode || !visible.length) return;
+    const ids = visible.map(item => item.id);
+    await exclusive('playground', async () => {
+      try {
+        const snapshot = await readSnapshot();
+        const byId = new Map(snapshot.items.map(item => [item.id, item]));
+        const candidates = ids.map(id => byId.get(id)).filter(Boolean);
+        if (!candidates.length) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
+        closeDetail();
+        setPlayFeedback(null);
+        setPlaySession({ id: ++playSequence.current, scope: favoriteScope, items: candidates });
+      } catch (error) { showToast(error); }
+    });
+  }
+  function togglePlaygroundFavorite(id) {
+    if (!playSession || playSession.scope !== favoriteScope || busyRef.current || libraryError || !playSession.items.some(item => item.id === id)) return;
+    setPlayFeedback(null);
+    toggleFavorite(id);
+  }
+  async function openPlaygroundDetail(item) {
+    if (!playSession || playSession.scope !== favoriteScope || busyRef.current || !playSession.items.some(candidate => candidate.id === item?.id)) return;
+    await exclusive('play-detail', async () => {
+      try {
+        setPlayFeedback(null);
+        await readSnapshot();
+        const current = unwrap(await bridge.libraryGet(item.id)).item;
+        closeDetail(); setPlaySession(null); setSelectedId(current.id); setDetailItem(current);
+      } catch (error) { setPlayFeedback({ error: true, value: error }); showToast(error); }
+    });
+  }
+  async function refreshPlaygroundImage(item) {
+    if (!playSession || playSession.scope !== favoriteScope || busyRef.current || !playSession.items.some(candidate => candidate.id === item?.id)) return false;
+    const sessionId = playSession.id;
+    return await exclusive('play-image', async () => {
+      try {
+        setPlayFeedback(null);
+        await readSnapshot();
+        const current = unwrap(await bridge.libraryGet(item.id)).item;
+        setPlaySession(previous => previous?.id === sessionId ? { ...previous, items: previous.items.map(candidate => candidate.id === current.id ? current : candidate) } : previous);
+        return true;
+      } catch (error) { setPlayFeedback({ error: true, value: error }); showToast(error); return false; }
+    });
+  }
+  async function copyPlaygroundPrompt(item) {
+    if (!playSession || busyRef.current || !playSession.items.some(candidate => candidate.id === item?.id)) return;
+    const sessionId = playSession.id;
+    const success = await copyPrompt(item);
+    if (playSessionRef.current?.id !== sessionId) return;
+    setPlayFeedback({ error: !success, value: { key: success ? 'common.copied' : 'app.copyFailed' } });
+  }
+  function remixPlaygroundItem(item) {
+    if (!playSession || playSession.scope !== favoriteScope || !playSession.items.some(candidate => candidate.id === item?.id)) return;
+    openCreativeLab([item.id]);
+  }
   async function openCreativeLab(seedIds) {
     if (!canCreateDraft || busyRef.current || selectionMode || editor || deleteTarget || batchOpen || processOpen || connectionOpen || creativeSession) return;
     let ids;
@@ -390,10 +454,11 @@ export default function App() {
     }
     await exclusive('creative', async () => {
       try {
+        if (playSession) setPlayFeedback(null);
         const sources = await readCreativeSources(ids);
-        closeDetail(); setComparisonItems(null);
+        closeDetail(); setComparisonItems(null); setPlaySession(null);
         setCreativeSession({ id: ++creativeSequence.current, scope: favoriteScope, sources });
-      } catch (error) { showToast(error); }
+      } catch (error) { if (playSession) setPlayFeedback({ error: true, value: error }); showToast(error); }
     });
   }
   async function changeCreativeSources(ids) {
@@ -410,11 +475,37 @@ export default function App() {
     });
   }
   function updateCreativeDraft(draftLanguage, text) {
-    if (!creativeSession || !canCreateDraft || busyRef.current) return { error: 'lab.unavailable' };
+    if (!creativeSession || creativeSession.scope !== favoriteScope || !canCreateDraft || busyRef.current) return { error: 'lab.unavailable' };
     return setCreativeDraft(draftLanguage, text);
   }
+  function updateCreativeDrafts(drafts) {
+    if (!creativeSession || creativeSession.scope !== favoriteScope || !canCreateDraft || busyRef.current) return { error: 'lab.unavailable' };
+    return setCreativeDrafts(drafts);
+  }
+  function canChangePlans() {
+    return creativeSession && creativeSession.scope === favoriteScope && canCreateDraft && !busyRef.current;
+  }
+  function saveCreativePlan(title) {
+    if (!canChangePlans()) return { ok: false, error: 'plans.unavailable' };
+    return savePlan({ title, drafts: creativeDrafts });
+  }
+  function renameCreativePlan(id, title) {
+    if (!canChangePlans()) return { ok: false, error: 'plans.unavailable' };
+    return renamePlan(id, title);
+  }
+  function removeCreativePlan(id) {
+    if (!canChangePlans()) return { ok: false, error: 'plans.unavailable' };
+    return removePlan(id);
+  }
+  function restoreCreativePlan(plan) {
+    if (!canChangePlans()) return { ok: false, error: 'plans.unavailable' };
+    const saved = plans.find(candidate => candidate.id === plan?.id);
+    if (!saved) return { ok: false, error: 'plans.notFound' };
+    const result = setCreativeDrafts(saved.drafts);
+    return result.error ? { ok: false, error: result.error } : { ok: true };
+  }
   async function copyCreativeDraft(text) {
-    if (!creativeSession || busyRef.current || typeof text !== 'string' || !text.trim()) return false;
+    if (!creativeSession || creativeSession.scope !== favoriteScope || !canCreateDraft || busyRef.current || typeof text !== 'string' || !text.trim()) return false;
     if (text.length > MAX_DRAFT_LENGTH) { showToast({ key: 'lab.tooLong', params: { max: MAX_DRAFT_LENGTH } }); return false; }
     try {
       const copied = typeof bridge?.copyText === 'function' ? await bridge.copyText(text) : false;
@@ -604,6 +695,7 @@ export default function App() {
   }
   const toastText = toast?.key ? t(toast.key, { ...toast.params, ...(toast.params?.error ? { error: describeError(toast.params.error) } : {}), ...(toast.params?.languageKey ? { language: t(toast.params.languageKey) } : {}) }) : describeError(toast);
   const visibleLibrary = { ...library, writable: desktop ? canManage : library.writable, connected: remoteBackend ? connection.status === 'connected' : library.configured, connectionStatus: remoteBackend ? pending === 'loading' ? 'connecting' : connection.status : undefined };
+  const playgroundFeedback = playFeedback ?? (storageFailed ? { error: true, value: { key: 'favorites.sessionOnly' } } : null);
   return <RemoteConnectionContext.Provider value={{ backend: remoteBackend ? 'remote' : 'local', root: library.root, configured: library.configured, allowed: (remoteBackend ? connectionSupported : desktop && typeof bridge?.chooseLibrary === 'function') && !pending && !managing, onOpen: remoteBackend ? openConnectionSettings : configureLibrary, onAuthenticationError: error => { if (remoteBackend && isAuthenticationError(error)) showToast(error); } }}>
     <div className="app-shell"><Sidebar portraits={items} favoriteCount={favoriteCount} favoritesOnly={favoritesOnly} onFavoriteView={changeFavoriteView} favoritesAvailable={Boolean(favoriteScope)} pending={Boolean(pending) || managing} />
       <main className={`main-content${comparisonCandidates.length ? ' has-comparison' : ''}`}>
@@ -611,6 +703,7 @@ export default function App() {
           onRandom={openRandom} randomDisabled={Boolean(pending) || managing || selectionMode || !visible.length}
           onCompare={openComparison} compareCount={comparisonCandidates.length} compareDisabled={!canCompare || comparisonCandidates.length < 2 || Boolean(pending) || managing || selectionMode}
           onCreativeLab={() => openCreativeLab()} creativeDisabled={!canCreateDraft || Boolean(pending) || managing || selectionMode}
+          onPlayground={openPlayground} playgroundDisabled={!canCreateDraft || Boolean(pending) || managing || selectionMode || !visible.length}
           library={visibleLibrary} desktop={desktop} connected={connected} editable={canManage} pending={Boolean(pending) || managing}
           onConfigure={configureLibrary} onRefresh={refreshLibrary} onCreate={beginCreate}
           onBatch={() => { if (canManage && !busyRef.current && !managing) setBatchOpen(true); }}
@@ -642,7 +735,13 @@ export default function App() {
     <CompareDialog items={comparisonItems} language={language} pending={Boolean(pending)} onClose={() => { if (!busyRef.current) setComparisonItems(null); }} onCopy={copyPrompt} onOpenImage={openImage}
       onCreativeLab={() => openCreativeLab(comparisonItems.map(item => item.id))} />
     <CreativeLab session={creativeSession} items={items} language={language} drafts={creativeDrafts} storageFailed={creativeStorageFailed} onDraftChange={updateCreativeDraft}
+      onDraftsChange={updateCreativeDrafts}
+      plans={plans} plansStorageFailed={plansStorageFailed} onSavePlan={saveCreativePlan} onRenamePlan={renameCreativePlan} onRemovePlan={removeCreativePlan} onRestorePlan={restoreCreativePlan}
       onSourceIdsChange={changeCreativeSources} pending={Boolean(pending)} onClose={() => { if (!busyRef.current) setCreativeSession(null); }} onCopy={copyCreativeDraft} />
+    <Playground session={playSession} language={language} favoriteIds={favoriteIds} pending={Boolean(pending)}
+      feedback={playgroundFeedback ? { error: playgroundFeedback.error, text: describeError(playgroundFeedback.value) } : null}
+      onClose={() => { if (!busyRef.current) { setPlaySession(null); setPlayFeedback(null); } }} onToggleFavorite={togglePlaygroundFavorite}
+      onOpenDetail={openPlaygroundDetail} onCreativeLab={remixPlaygroundItem} onCopy={copyPlaygroundPrompt} onRetryImage={refreshPlaygroundImage} />
     <PortraitEditor editor={editor} pending={Boolean(pending)} saving={pending === 'save'} canSave={canManage} onCancel={cancelEditor} onChooseImage={chooseEditorImage} onSave={saveEditor} onReviewConflict={() => setEditor(previous => ({ ...previous, reviewOpen: true }))} onAcknowledgeConflict={acknowledgeConflict} />
     <DeleteConfirm target={deleteTarget} pending={Boolean(pending)} onCancel={() => { if (!busyRef.current) setDeleteTarget(null); }} onConfirm={confirmDelete} />
     <BatchImportDialog open={batchOpen} root={library.root} allowed={canManage && !pending && !editor && !deleteTarget} onClose={() => setBatchOpen(false)} onImported={(snapshot, report) => { applySnapshot(snapshot); setQuery(''); showToast({ key: 'app.batchSaved', params: report }); }} />

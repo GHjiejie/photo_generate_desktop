@@ -20,7 +20,9 @@
     "test:creative": "npm run build && node scripts/verify-creative.cjs",
     "test:server": "cd server && go test ./...",
     "test:remote": "npm run build && node scripts/verify-remote-native.cjs",
-    "test:browse": "npm run build && node scripts/verify-browse.cjs"
+    "test:browse": "npm run build && node scripts/verify-browse.cjs",
+    "test:playground": "npm run build && node scripts/verify-playground.cjs",
+    "test:plans": "npm run build && node scripts/verify-plans.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { labelFor, portraitNumber, promptFor } from '../portraits.js';
 import { MAX_DRAFT_LENGTH, DICE_CATEGORIES, splitPromptBlocks, composeBlocks, rollDice, diceOption, diceText } from '../creative-lab.mjs';
+import PromptPlans, { PromptPlansIcon } from './PromptPlans.jsx';
 
 export function CreativeLabIcon() {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M9 3h6m-5 0v6l-6.1 9.3A2 2 0 0 0 5.6 21h12.8a2 2 0 0 0 1.7-2.7L14 9V3M7.4 13h9.2" /><path d="m10 16 1.1 1.1M14 18h.01" /></svg>;
@@ -14,7 +15,7 @@ function LockIcon({ locked }) {
 const emptyHistory = () => ({ zh: [], en: [] });
 const categoryId = category => `labDice${category[0].toUpperCase()}${category.slice(1)}`;
 
-export default function CreativeLab({ session, items, language, drafts, onDraftChange, onSourceIdsChange, pending, storageFailed, onClose, onCopy }) {
+export default function CreativeLab({ session, items, language, drafts, onDraftChange, onDraftsChange, onSourceIdsChange, pending, storageFailed, plans = [], plansStorageFailed, onSavePlan, onRenamePlan, onRemovePlan, onRestorePlan, onClose, onCopy }) {
   const { t, uiLanguage } = useI18n();
   const dialogRef = useRef(null);
   const sessionIdRef = useRef(null);
@@ -26,6 +27,7 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
   const [history, setHistory] = useState(emptyHistory);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
   const sources = session?.sources ?? [];
   const currentDraft = drafts?.[language] ?? '';
   const sourceIds = sources.map(source => source.id);
@@ -39,7 +41,7 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
   const selectedBlocks = blocks.filter(block => selectedKeys.has(block.key));
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) { setPlansOpen(false); copyRequestRef.current += 1; return; }
     if (sessionIdRef.current !== session.id) {
       sessionIdRef.current = session.id;
       const firstId = session.sources[0]?.id;
@@ -48,6 +50,7 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
         en: blocksByLanguage.en.filter(block => block.sourceId === firstId).map(block => block.key)
       });
       setDice(rollDice({}, {})); setLocked({}); setHistory(emptyHistory()); setError(''); setSourceId(''); setCopied(false); copyRequestRef.current += 1;
+      setPlansOpen(false);
     } else {
       setSelected(previous => ({
         zh: previous.zh.filter(key => blocksByLanguage.zh.some(block => block.key === key)),
@@ -84,7 +87,28 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
   function undo() {
     const previous = history[language];
     if (!previous.length || pending) return;
-    if (writeDraft(previous.at(-1), false)) setHistory(value => ({ ...value, [language]: value[language].slice(0, -1) }));
+    const entry = previous.at(-1);
+    if (typeof entry === 'object') {
+      const result = onDraftsChange(entry.drafts);
+      if (result?.error) { setError(result.error); return; }
+      setCopied(false); setError(''); copyRequestRef.current += 1;
+      setHistory(value => ({ ...value, [language]: value[language].slice(0, -1) }));
+    } else if (writeDraft(entry, false)) setHistory(value => ({ ...value, [language]: value[language].slice(0, -1) }));
+  }
+  function restorePlan(plan) {
+    if (pending) return { ok: false, error: 'plans.unavailable' };
+    const result = onRestorePlan(plan);
+    if (result?.ok) {
+      if (['zh', 'en'].some(locale => drafts[locale] !== plan.drafts[locale])) {
+        setHistory(previous => ({ ...previous, [language]: [...previous[language], { drafts: { ...drafts } }].slice(-20) }));
+      }
+      setCopied(false); setError(''); copyRequestRef.current += 1;
+    }
+    return result;
+  }
+  function closePlans() {
+    setPlansOpen(false);
+    requestAnimationFrame(() => document.getElementById('labOpenPlans')?.focus());
   }
   function appendDirections() {
     const directions = diceText(dice, language);
@@ -116,8 +140,8 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
 
   return <dialog id="creativeLabDialog" ref={dialogRef} className="creative-lab-dialog" aria-labelledby="creativeLabTitle" aria-describedby="creativeLabIntro" onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={event => event.stopPropagation()}>
     <header className="creative-lab-heading"><div className="creative-lab-title"><span className="creative-lab-mark"><CreativeLabIcon /></span><div><h2 id="creativeLabTitle">{t('lab.title')}</h2><p id="creativeLabIntro">{t('lab.intro')}</p></div></div><button id="closeCreativeLab" className="dialog-close" type="button" aria-label={t('common.close')} onClick={onClose}>×</button></header>
-    <div className="creative-lab-layout">
-      <section className="lab-references" aria-labelledby="labReferencesTitle">
+    <div className={`creative-lab-layout${plansOpen ? ' plans-mode' : ''}`}>
+      {!plansOpen && <section className="lab-references" aria-labelledby="labReferencesTitle">
         <div className="lab-section-heading"><h3 id="labReferencesTitle">{t('lab.references')}</h3><span>{t('lab.sourceCount', { count: sources.length })}</span></div>
         <div className="lab-source-picker"><label className="sr-only" htmlFor="labSourceSelect">{t('lab.chooseSource')}</label><select id="labSourceSelect" value={sourceId} disabled={pending || sources.length >= 4 || !availableItems.length} onChange={event => setSourceId(event.target.value)}><option value="">{t('lab.chooseSource')}</option>{availableItems.map(item => <option key={item.id} value={item.id}>{portraitNumber(item)} · {labelFor(item, uiLanguage)}</option>)}</select><button id="labAddSource" className="secondary-button" type="button" disabled={pending || !sourceId || sources.length >= 4} onClick={addSource}>{t('lab.addSource')}</button></div>
         <div className="lab-source-list">
@@ -128,16 +152,17 @@ export default function CreativeLab({ session, items, language, drafts, onDraftC
           </article>)}
         </div>
         <div className="lab-compose-row"><span>{t('lab.blockCount', { count: selectedBlocks.length })}</span><button id="labCompose" className="secondary-button" type="button" disabled={pending || !selectedBlocks.length} onClick={compose}>{t('lab.compose')}</button></div>
-      </section>
-      <section className="lab-workspace" aria-labelledby="labDraftTitle">
+      </section>}
+      {plansOpen ? <PromptPlans plans={plans} drafts={drafts} language={language} pending={pending} storageFailed={plansStorageFailed || storageFailed}
+        onSave={onSavePlan} onRename={onRenamePlan} onRemove={onRemovePlan} onRestore={restorePlan} onBack={closePlans} onCopy={onCopy} /> : <section className="lab-workspace" aria-labelledby="labDraftTitle">
         <div className="lab-section-heading"><h3>{t('lab.diceTitle')}</h3><button id="labRollDice" className="text-button lab-roll-dice" type="button" disabled={pending || DICE_CATEGORIES.every(category => locked[category])} onClick={() => { setDice(previous => rollDice(previous, locked)); setError(''); }}><span aria-hidden="true">⚄</span>{t('lab.rollDice')}</button></div>
         <div className="lab-dice-grid">{DICE_CATEGORIES.map(category => <article key={category} id={categoryId(category)} className={`lab-dice-card${locked[category] ? ' locked' : ''}`}><div className="lab-dice-heading"><strong>{categoryLabel(category)}</strong><button className="lab-dice-lock" type="button" data-lab-lock={category} aria-pressed={Boolean(locked[category])} aria-label={t(locked[category] ? 'lab.unlockNamed' : 'lab.lockNamed', { category: categoryLabel(category) })} title={t(locked[category] ? 'lab.unlockNamed' : 'lab.lockNamed', { category: categoryLabel(category) })} disabled={pending} onClick={() => setLocked(previous => ({ ...previous, [category]: !previous[category] }))}><LockIcon locked={locked[category]} /><span>{t(locked[category] ? 'lab.locked' : 'lab.lock')}</span></button></div><p data-lab-direction={category} lang={language === 'zh' ? 'zh-CN' : 'en'}>{diceOption(category, dice[category])?.[language] ?? ''}</p></article>)}</div>
         <div className="lab-dice-footer"><span>{t('lab.diceHint')}</span><button id="labAppendDice" className="text-button" type="button" disabled={pending} onClick={appendDirections}>{t('lab.appendDice')}</button></div>
-        <div className="lab-draft-heading"><label id="labDraftTitle" htmlFor="labDraft">{t('lab.draftTitle')}</label><span>{t('lab.language', { language: t(language === 'zh' ? 'app.chinese' : 'app.english') })}</span></div>
+        <div className="lab-draft-heading"><div className="lab-draft-label"><label id="labDraftTitle" htmlFor="labDraft">{t('lab.draftTitle')}</label><span>{t('lab.language', { language: t(language === 'zh' ? 'app.chinese' : 'app.english') })}</span></div><button id="labOpenPlans" className="text-button lab-open-plans" type="button" disabled={pending} onClick={() => { setPlansOpen(true); setCopied(false); copyRequestRef.current += 1; }}><PromptPlansIcon />{t('plans.open', { count: plans.length })}</button></div>
         <textarea id="labDraft" value={currentDraft} disabled={pending} placeholder={t('lab.draftPlaceholder')} lang={language === 'zh' ? 'zh-CN' : 'en'} spellCheck={false} aria-invalid={Boolean(error) || tooLong} aria-describedby={inlineError ? 'labError' : copied ? 'labCopyStatus' : 'labDraftHint'} onChange={event => writeDraft(event.target.value, false)} />
         {inlineError && <p id="labError" className="lab-error" role="alert">{t(inlineError, { max: MAX_DRAFT_LENGTH })}</p>}
         <footer className="lab-draft-footer">{copied ? <span id="labCopyStatus" className="lab-copy-status" role="status">{t('lab.copied')}</span> : <span id="labDraftHint" className="lab-draft-count">{t('lab.draftCount', { count: currentDraft.length, max: MAX_DRAFT_LENGTH })}</span>}<div><button id="labUndo" className="secondary-button" type="button" disabled={pending || !history[language].length} onClick={undo}>{t('lab.undo')}</button><button id="labCopyDraft" className="primary-button" type="button" disabled={pending || !currentDraft.trim() || tooLong} onClick={copyDraft}>{t('lab.copy')}</button></div></footer>
-      </section>
+      </section>}
     </div>
   </dialog>;
 }
